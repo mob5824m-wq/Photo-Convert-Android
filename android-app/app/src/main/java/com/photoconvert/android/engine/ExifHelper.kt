@@ -64,11 +64,31 @@ object ExifHelper {
         return rotated
     }
 
-    fun writePreservedExif(targetFile: File, attrs: Map<String, String>): Boolean {
-        if (attrs.isEmpty()) return false
+    fun writePreservedExif(
+        targetFile: File,
+        attrs: Map<String, String>,
+        originalFilename: String,
+        repairFilenameDates: Boolean
+    ): Pair<Boolean, Boolean> {
+        val mutableAttrs = attrs.toMutableMap()
+        var repaired = false
+
+        val hasCaptureDate = !mutableAttrs[ExifInterface.TAG_DATETIME_ORIGINAL].isNullOrBlank()
+        if (!hasCaptureDate && repairFilenameDates) {
+            val inferred = BatchRenamer.inferExifDateFromFilename(originalFilename)
+            if (inferred != null) {
+                mutableAttrs[ExifInterface.TAG_DATETIME_ORIGINAL] = inferred
+                mutableAttrs[ExifInterface.TAG_DATETIME_DIGITIZED] = inferred
+                mutableAttrs[ExifInterface.TAG_DATETIME] = inferred
+                repaired = true
+            }
+        }
+
+        if (mutableAttrs.isEmpty()) return false to false
+
         return try {
             val exif = ExifInterface(targetFile)
-            for ((tag, value) in attrs) {
+            for ((tag, value) in mutableAttrs) {
                 exif.setAttribute(tag, value)
             }
             exif.setAttribute(
@@ -76,9 +96,9 @@ object ExifHelper {
                 ExifInterface.ORIENTATION_NORMAL.toString()
             )
             exif.saveAttributes()
-            true
+            true to repaired
         } catch (_: Exception) {
-            false
+            false to false
         }
     }
 }

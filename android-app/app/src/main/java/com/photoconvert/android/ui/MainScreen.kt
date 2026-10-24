@@ -15,6 +15,7 @@ import androidx.compose.material.icons.outlined.DarkMode
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.LightMode
 import androidx.compose.material.icons.outlined.PhotoLibrary
+import androidx.compose.material.icons.outlined.PictureAsPdf
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
@@ -41,9 +42,11 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.photoconvert.android.model.ByteFormatter
+import com.photoconvert.android.ui.components.BeforeAfterLoupeDialog
 import com.photoconvert.android.ui.screens.ConvertScreen
 import com.photoconvert.android.ui.screens.HistoryScreen
 import com.photoconvert.android.ui.screens.PresetsScreen
+import com.photoconvert.android.ui.screens.ToolsScreen
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -63,6 +66,13 @@ fun MainScreen(viewModel: ConvertViewModel) {
         val msg = state.statusMessage ?: return@LaunchedEffect
         snackbarHostState.showSnackbar(msg)
         viewModel.consumeStatusMessage()
+    }
+
+    state.loupePreview?.let { preview ->
+        BeforeAfterLoupeDialog(
+            preview = preview,
+            onDismiss = viewModel::closeLoupePreview
+        )
     }
 
     Scaffold(
@@ -113,12 +123,18 @@ fun MainScreen(viewModel: ConvertViewModel) {
                 NavigationBarItem(
                     selected = state.selectedTab == 1,
                     onClick = { viewModel.selectTab(1) },
-                    icon = { Icon(Icons.Outlined.Tune, contentDescription = null) },
-                    label = { Text("Presets") }
+                    icon = { Icon(Icons.Outlined.PictureAsPdf, contentDescription = null) },
+                    label = { Text("PDF & Watch") }
                 )
                 NavigationBarItem(
                     selected = state.selectedTab == 2,
                     onClick = { viewModel.selectTab(2) },
+                    icon = { Icon(Icons.Outlined.Tune, contentDescription = null) },
+                    label = { Text("Presets") }
+                )
+                NavigationBarItem(
+                    selected = state.selectedTab == 3,
+                    onClick = { viewModel.selectTab(3) },
                     icon = {
                         BadgedBox(
                             badge = {
@@ -141,6 +157,7 @@ fun MainScreen(viewModel: ConvertViewModel) {
                     queuedUris = state.queuedUris,
                     settings = state.settings,
                     isConverting = state.isConverting,
+                    loupeLoading = state.loupeLoading,
                     progressDone = state.progressDone,
                     progressTotal = state.progressTotal,
                     latestBatch = state.latestBatch,
@@ -149,13 +166,24 @@ fun MainScreen(viewModel: ConvertViewModel) {
                             PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
                         )
                     },
+                    onInspectLoupe = viewModel::openLoupePreview,
                     onRemoveQueued = viewModel::removeQueuedUri,
                     onClearQueue = viewModel::clearQueue,
                     onUpdateSettings = viewModel::updateSettings,
                     onRunConvert = viewModel::convertQueuedPhotos
                 )
 
-                1 -> PresetsScreen(
+                1 -> ToolsScreen(
+                    isBuildingPdf = state.isBuildingPdf,
+                    latestPdfFile = state.latestPdfFile,
+                    watchedFolder = state.watchedFolder,
+                    onBuildPdf = viewModel::buildPdfDocument,
+                    onSelectWatchedFolder = viewModel::selectWatchedFolderUri,
+                    onToggleWatchedFolder = viewModel::toggleWatchedFolder,
+                    onScanWatchedNow = viewModel::scanWatchedFolderNow
+                )
+
+                2 -> PresetsScreen(
                     presets = state.presets,
                     onApplyPreset = viewModel::applyPreset,
                     onCreatePreset = viewModel::saveCurrentAsPreset,

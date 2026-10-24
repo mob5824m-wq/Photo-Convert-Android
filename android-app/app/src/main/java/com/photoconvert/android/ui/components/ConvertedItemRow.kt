@@ -60,7 +60,13 @@ fun ConvertedItemRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
-            val privacyLabel = if (item.exifKept) "EXIF kept" else "No EXIF"
+            val tags = buildList {
+                if (item.cutoutApplied) add("Cutout")
+                if (item.repairedDate) add("Date repaired")
+                else if (item.exifKept) add("EXIF kept")
+                else add("No EXIF")
+            }.joinToString(" · ")
+
             Text(
                 text = "${item.originalFormat} → ${item.outputFormat} · ${item.origWidth}×${item.origHeight} → ${item.outWidth}×${item.outHeight}",
                 style = MaterialTheme.typography.labelSmall,
@@ -68,7 +74,7 @@ fun ConvertedItemRow(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Text(
-                text = "${ByteFormatter.format(item.origBytes)} → ${ByteFormatter.format(item.outBytes)} · $privacyLabel",
+                text = "${ByteFormatter.format(item.origBytes)} → ${ByteFormatter.format(item.outBytes)} · $tags",
                 style = MaterialTheme.typography.labelSmall,
                 fontFamily = FontFamily.Monospace,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -92,7 +98,7 @@ fun ConvertedItemRow(
                 }
             }
 
-            IconButton(onClick = { shareConvertedFile(context, item) }) {
+            IconButton(onClick = { shareFile(context, File(item.localFilePath), item.mimeType, item.outputName) }) {
                 Icon(
                     imageVector = Icons.Outlined.Share,
                     contentDescription = "Share converted photo"
@@ -112,8 +118,7 @@ fun ConvertedItemRow(
     }
 }
 
-private fun shareConvertedFile(context: Context, item: ConvertedItem) {
-    val file = File(item.localFilePath)
+fun shareFile(context: Context, file: File, mimeType: String, displayName: String) {
     if (!file.exists()) return
     val uri = FileProvider.getUriForFile(
         context,
@@ -121,9 +126,9 @@ private fun shareConvertedFile(context: Context, item: ConvertedItem) {
         file
     )
     val sendIntent = Intent(Intent.ACTION_SEND).apply {
-        type = item.mimeType
+        type = mimeType
         putExtra(Intent.EXTRA_STREAM, uri)
         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
     }
-    context.startActivity(Intent.createChooser(sendIntent, "Share ${item.outputName}"))
+    context.startActivity(Intent.createChooser(sendIntent, "Share $displayName"))
 }

@@ -1,7 +1,10 @@
 package com.photoconvert.android
 
+import com.photoconvert.android.engine.BatchRenamer
 import com.photoconvert.android.engine.DimensionCalculator
+import com.photoconvert.android.model.AspectRatioOption
 import com.photoconvert.android.model.ByteFormatter
+import com.photoconvert.android.model.ConvertSettings
 import com.photoconvert.android.model.DefaultPresets
 import com.photoconvert.android.model.OutputFormat
 import com.photoconvert.android.model.ResizePreset
@@ -58,12 +61,45 @@ class DimensionCalculatorTest {
     }
 
     @Test
-    fun defaultPresetsCoverCoreFormats() {
-        assertEquals(5, DefaultPresets.list.size)
-        val formats = DefaultPresets.list.map { it.format }.toSet()
-        assertTrue(formats.contains(OutputFormat.WEBP))
-        assertTrue(formats.contains(OutputFormat.JPEG))
-        assertTrue(formats.contains(OutputFormat.PNG))
+    fun batchRenamerAndFilenameDateInferenceWork() {
+        assertEquals(
+            "2026:10:18 18:42:10",
+            BatchRenamer.inferExifDateFromFilename("IMG_20261018_184210_Sunset.jpg")
+        )
+        assertEquals(
+            "2026:10:20 12:00:00",
+            BatchRenamer.inferExifDateFromFilename("IMG-20261020-WA0042.jpg")
+        )
+
+        val rendered = BatchRenamer.renderOutputFilename(
+            pattern = "{date}_{orig}_{width}x{height}_{seq}",
+            originalFilename = "IMG_20261018_184210.jpg",
+            extension = "webp",
+            width = 1920,
+            height = 1080,
+            seq = 3
+        )
+        assertEquals("20261018_IMG_20261018_184210_1920x1080_003.webp", rendered)
+    }
+
+    @Test
+    fun cutoutAutoPromotesOpaqueFormatAndCountsEnhancements() {
+        val cfg = ConvertSettings(
+            format = OutputFormat.JPEG,
+            removeBackground = true,
+            aspectRatio = AspectRatioOption.PORTRAIT_4_5,
+            watermarkText = "© Studio"
+        )
+        assertEquals(OutputFormat.WEBP, cfg.effectiveFormat())
+        assertEquals(3, cfg.activeEnhancementCount())
+    }
+
+    @Test
+    fun defaultPresetsCoverAllNewCapabilities() {
+        assertEquals(7, DefaultPresets.list.size)
+        assertTrue(DefaultPresets.list.any { it.targetSizeKb == 500 })
+        assertTrue(DefaultPresets.list.any { it.removeBackground })
+        assertTrue(DefaultPresets.list.any { it.aspectRatio == AspectRatioOption.PORTRAIT_4_5 })
         assertEquals("1.5 MB", ByteFormatter.format(1_572_864L))
     }
 }

@@ -31,6 +31,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.photoconvert.android.model.AspectRatioOption
 import com.photoconvert.android.model.PresetProfile
 
 @Composable
@@ -162,10 +163,21 @@ fun PresetsScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
 
-                    val qualitySpec = if (preset.format.isLossless) "Lossless" else "${preset.quality}%"
-                    val exifSpec = if (preset.stripExif) "EXIF stripped" else "EXIF kept"
+                    val specs = buildList {
+                        add(preset.format.label)
+                        if (preset.targetSizeKb > 0) add("≤${preset.targetSizeKb} KB")
+                        else if (preset.format.isLossless) add("Lossless")
+                        else add("${preset.quality}%")
+                        add(preset.resizePreset.label)
+                        if (preset.aspectRatio != AspectRatioOption.ORIGINAL) {
+                            add("${preset.aspectRatio.label} ${preset.frameFillMode.label}")
+                        }
+                        if (preset.removeBackground) add("Cutout")
+                        add(if (preset.stripExif) "No EXIF" else "EXIF kept")
+                    }.joinToString(" · ")
+
                     Text(
-                        text = "${preset.format.label} · $qualitySpec · ${preset.resizePreset.label} · $exifSpec",
+                        text = specs,
                         style = MaterialTheme.typography.labelSmall,
                         fontFamily = FontFamily.Monospace,
                         color = MaterialTheme.colorScheme.onSurfaceVariant

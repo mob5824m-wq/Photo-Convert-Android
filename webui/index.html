@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="theme-color" content="#2563eb" />
-  <title>Photo Convert — Clean Batch Image Optimizer</title>
+  <title>Photo Convert — Clean Batch Image Studio</title>
   <link rel="icon" type="image/png" href="/favicon.png" />
   <link rel="manifest" href="/manifest.json" />
   <link rel="stylesheet" href="/styles.css" />
@@ -28,6 +28,7 @@
 
       <nav class="segmented-tabs" role="tablist" aria-label="Primary sections">
         <button class="seg-tab active" data-tab="convert" role="tab" aria-selected="true">Convert</button>
+        <button class="seg-tab" data-tab="tools" role="tab" aria-selected="false">PDF &amp; Watch</button>
         <button class="seg-tab" data-tab="presets" role="tab" aria-selected="false">Presets</button>
         <button class="seg-tab" data-tab="history" role="tab" aria-selected="false">
           History
@@ -55,13 +56,13 @@
           <div class="card-header">
             <div>
               <h2>Photos</h2>
-              <p class="subtext">Drop JPG, PNG, WebP, TIFF, or BMP images to convert locally.</p>
+              <p class="subtext">Drop JPG, PNG, WebP, AVIF, HEIC, TIFF, BMP, or RAW (DNG/CR2/NEF/ARW).</p>
             </div>
             <button class="ghost-btn" id="clearQueueBtn" hidden>Clear queue</button>
           </div>
 
           <div class="dropzone" id="dropzone" tabindex="0" role="button" aria-label="Select photos to convert">
-            <input type="file" id="fileInput" multiple accept="image/*" hidden />
+            <input type="file" id="fileInput" multiple accept="image/*,.heic,.heif,.avif,.dng,.cr2,.cr3,.nef,.arw,.orf,.rw2" hidden />
             <div class="dropzone-glyph">
               <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
@@ -70,14 +71,14 @@
               </svg>
             </div>
             <p class="dropzone-headline">Drop photos here or <span>browse device</span></p>
-            <p class="dropzone-caption">Batch-convert multiple high-resolution photos at once</p>
+            <p class="dropzone-caption">Supports standard formats, 10-bit AVIF/HEIC &amp; camera RAW files</p>
           </div>
 
           <div class="queue-list" id="queueList" hidden></div>
 
           <div class="sample-bar">
-            <span class="subtext">Want a quick test?</span>
-            <button class="text-action" id="runSampleBtn" type="button">Convert 3 sample high-res photos &rarr;</button>
+            <button class="text-action" id="openSampleLoupeBtn" type="button">Compare Before/After Loupe</button>
+            <button class="text-action" id="runSampleBtn" type="button">Convert 3 sample photos &rarr;</button>
           </div>
         </div>
 
@@ -95,18 +96,40 @@
             <div class="chip-row" id="formatChips">
               <button type="button" class="choice-chip active" data-format="webp">WebP</button>
               <button type="button" class="choice-chip" data-format="jpeg">JPEG</button>
+              <button type="button" class="choice-chip" data-format="avif">AVIF</button>
+              <button type="button" class="choice-chip" data-format="heic">HEIC</button>
               <button type="button" class="choice-chip" data-format="png">PNG</button>
               <button type="button" class="choice-chip" data-format="tiff">TIFF</button>
               <button type="button" class="choice-chip" data-format="bmp">BMP</button>
             </div>
           </div>
 
-          <div class="field-group" id="qualityGroup">
+          <!-- Compression Mode: Quality % vs Exact Target File Size (#2) -->
+          <div class="field-group">
             <div class="field-row">
-              <label class="field-label" for="qualitySlider">Quality</label>
+              <div class="mini-seg" id="compressionModeTabs">
+                <button type="button" class="mini-seg-btn active" data-cmode="quality">Quality %</button>
+                <button type="button" class="mini-seg-btn" data-cmode="target">Fit Target KB</button>
+              </div>
               <span class="value-badge" id="qualityBadge">85%</span>
             </div>
-            <input type="range" id="qualitySlider" min="10" max="100" value="85" class="range-slider" />
+
+            <div id="qualityModeWrap">
+              <input type="range" id="qualitySlider" min="10" max="100" value="85" class="range-slider" />
+            </div>
+
+            <div id="targetSizeWrap" hidden>
+              <div class="chip-row" id="targetSizeChips" style="margin-bottom:8px">
+                <button type="button" class="choice-chip" data-kb="200">200 KB</button>
+                <button type="button" class="choice-chip active" data-kb="500">500 KB</button>
+                <button type="button" class="choice-chip" data-kb="1024">1 MB</button>
+                <button type="button" class="choice-chip" data-kb="2048">2 MB</button>
+              </div>
+              <div class="custom-edge-wrap">
+                <label for="targetKbInput" class="subtext">Exact ceiling (KB)</label>
+                <input type="number" id="targetKbInput" min="20" max="51200" value="500" class="text-input compact-input" />
+              </div>
+            </div>
           </div>
 
           <div class="field-group">
@@ -124,13 +147,101 @@
             </div>
           </div>
 
-          <label class="switch-row" for="stripExifToggle">
-            <div>
-              <span class="switch-title">Strip EXIF &amp; GPS metadata</span>
-              <span class="subtext">Removes location coordinates and camera serials</span>
+          <!-- Privacy, Date Repair (#8) & Wide-Gamut sRGB (#9) -->
+          <div class="toggles-stack">
+            <label class="switch-row compact-switch" for="stripExifToggle">
+              <div>
+                <span class="switch-title">Strip EXIF &amp; GPS metadata</span>
+                <span class="subtext">Removes location coordinates and camera identifiers</span>
+              </div>
+              <input type="checkbox" id="stripExifToggle" class="toggle-checkbox" checked />
+            </label>
+
+            <label class="switch-row compact-switch" id="repairDateRow" for="repairDatesToggle" hidden>
+              <div>
+                <span class="switch-title">Repair missing capture dates</span>
+                <span class="subtext">Rebuilds EXIF dates from IMG_YYYYMMDD / WhatsApp filenames</span>
+              </div>
+              <input type="checkbox" id="repairDatesToggle" class="toggle-checkbox" checked />
+            </label>
+
+            <label class="switch-row compact-switch" for="srgbToggle">
+              <div>
+                <span class="switch-title">Normalize Display P3 &rarr; sRGB</span>
+                <span class="subtext">Embeds standard sRGB ICC profile for consistent colors</span>
+              </div>
+              <input type="checkbox" id="srgbToggle" class="toggle-checkbox" checked />
+            </label>
+          </div>
+
+          <!-- Progressive Disclosure: Studio Enhancements (#6, #7, #8, #10) -->
+          <details class="studio-drawer" id="studioDrawer">
+            <summary class="studio-summary">
+              <span>Studio Enhancements</span>
+              <span class="value-badge" id="enhancementsCountBadge">Off</span>
+            </summary>
+
+            <div class="studio-body">
+              <!-- #10 Offline Subject Cutout -->
+              <label class="switch-row compact-switch" for="cutoutToggle">
+                <div>
+                  <span class="switch-title">Offline Subject Cutout</span>
+                  <span class="subtext">Removes border background to transparent WebP/PNG</span>
+                </div>
+                <input type="checkbox" id="cutoutToggle" class="toggle-checkbox" />
+              </label>
+
+              <!-- #7 Smart Aspect-Ratio Framing -->
+              <div class="sub-field">
+                <label class="field-label">Aspect Ratio Framing</label>
+                <div class="chip-row" id="aspectChips">
+                  <button type="button" class="choice-chip active" data-aspect="original">Original</button>
+                  <button type="button" class="choice-chip" data-aspect="1:1">1:1</button>
+                  <button type="button" class="choice-chip" data-aspect="4:5">4:5</button>
+                  <button type="button" class="choice-chip" data-aspect="16:9">16:9</button>
+                  <button type="button" class="choice-chip" data-aspect="9:16">9:16</button>
+                </div>
+                <div class="chip-row" id="frameModeWrap" style="margin-top:8px" hidden>
+                  <button type="button" class="choice-chip active" data-fmode="blur">Blur Backdrop</button>
+                  <button type="button" class="choice-chip" data-fmode="white">White Pad</button>
+                  <button type="button" class="choice-chip" data-fmode="black">Black Pad</button>
+                  <button type="button" class="choice-chip" data-fmode="crop">Center Crop</button>
+                </div>
+              </div>
+
+              <!-- #6 Batch Watermark -->
+              <div class="sub-field">
+                <label class="field-label" for="watermarkTextInput">Watermark Overlay</label>
+                <input type="text" id="watermarkTextInput" class="text-input" placeholder="Optional text (e.g., © 2026 Studio)" maxlength="80" />
+                <div class="watermark-extra" id="watermarkExtraWrap" hidden>
+                  <select id="watermarkPosSelect" class="text-input">
+                    <option value="bottom-right">Bottom Right</option>
+                    <option value="bottom-left">Bottom Left</option>
+                    <option value="top-right">Top Right</option>
+                    <option value="top-left">Top Left</option>
+                    <option value="center">Center</option>
+                  </select>
+                  <div class="wm-opacity-box">
+                    <span class="subtext" id="wmOpacityLabel">65%</span>
+                    <input type="range" id="watermarkOpacitySlider" min="15" max="100" value="65" class="range-slider" />
+                  </div>
+                </div>
+              </div>
+
+              <!-- #8 Token Batch Renaming -->
+              <div class="sub-field">
+                <label class="field-label" for="renamePatternInput">Batch Rename Template</label>
+                <input type="text" id="renamePatternInput" class="text-input mono-input" value="{orig}" placeholder="{date}_{orig}_{seq}" />
+                <div class="token-row" id="renameTokens">
+                  <button type="button" class="token-pill" data-token="{orig}">{orig}</button>
+                  <button type="button" class="token-pill" data-token="{date}">{date}</button>
+                  <button type="button" class="token-pill" data-token="{width}x{height}">{width}x{height}</button>
+                  <button type="button" class="token-pill" data-token="{seq}">{seq}</button>
+                  <button type="button" class="token-pill" data-token="{format}">{format}</button>
+                </div>
+              </div>
             </div>
-            <input type="checkbox" id="stripExifToggle" class="toggle-checkbox" checked />
-          </label>
+          </details>
 
           <button type="button" class="primary-btn full-btn" id="convertBtn" disabled>
             Select Photos to Convert
@@ -146,6 +257,7 @@
             <p class="subtext" id="batchSummaryText"></p>
           </div>
           <div class="header-actions">
+            <button type="button" class="secondary-btn" id="exportBatchPdfBtn">Export PDF</button>
             <button type="button" class="secondary-btn" id="downloadBatchZipBtn">Download All (.zip)</button>
           </div>
         </div>
@@ -153,19 +265,105 @@
       </div>
     </section>
 
-    <!-- TAB 2: PRESETS -->
+    <!-- TAB 2: PDF BUILDER (#3) & WATCHED FOLDER (#4) -->
+    <section class="panel" id="panel-tools" role="tabpanel">
+      <div class="convert-grid">
+        <!-- #3 Batch Photo-to-PDF & Scan Sheet Exporter -->
+        <div class="surface-card">
+          <div class="card-header">
+            <div>
+              <h2>Photo-to-PDF &amp; Scan Sheet</h2>
+              <p class="subtext">Combine multiple photos into a clean, size-optimized multi-page PDF.</p>
+            </div>
+          </div>
+
+          <div class="dropzone compact-dropzone" id="pdfDropzone" tabindex="0" role="button">
+            <input type="file" id="pdfFileInput" multiple accept="image/*,.heic,.heif,.avif,.dng" hidden />
+            <p class="dropzone-headline">Select photos for PDF pages or <span>browse</span></p>
+            <p class="dropzone-caption" id="pdfFilesLabel">No files selected yet</p>
+          </div>
+
+          <div class="field-group" style="margin-top:16px">
+            <label class="field-label">Page Size</label>
+            <div class="chip-row" id="pdfPageChips">
+              <button type="button" class="choice-chip active" data-pdf-page="a4">A4</button>
+              <button type="button" class="choice-chip" data-pdf-page="letter">US Letter</button>
+              <button type="button" class="choice-chip" data-pdf-page="fit">Fit Photo</button>
+            </div>
+          </div>
+
+          <div class="field-group">
+            <label class="field-label">Page Margin</label>
+            <div class="chip-row" id="pdfMarginChips">
+              <button type="button" class="choice-chip" data-pdf-margin="none">None</button>
+              <button type="button" class="choice-chip active" data-pdf-margin="small">Small</button>
+              <button type="button" class="choice-chip" data-pdf-margin="standard">Standard</button>
+            </div>
+          </div>
+
+          <label class="switch-row compact-switch" for="pdfScanFilterToggle">
+            <div>
+              <span class="switch-title">High-Contrast Document Scan Filter</span>
+              <span class="subtext">Crisp grayscale boost ideal for receipts, notes &amp; whiteboards</span>
+            </div>
+            <input type="checkbox" id="pdfScanFilterToggle" class="toggle-checkbox" />
+          </label>
+
+          <button type="button" class="primary-btn full-btn" id="buildPdfBtn" style="margin-top:14px" disabled>
+            Select Photos to Build PDF
+          </button>
+        </div>
+
+        <!-- #4 Background Watched-Folder Auto-Converter -->
+        <div class="surface-card">
+          <div class="card-header">
+            <div>
+              <h2>Watched-Folder Auto-Converter</h2>
+              <p class="subtext">Monitors an inbox folder in the background and converts dropped images automatically.</p>
+            </div>
+            <span class="saved-pill" id="watcherStatusBadge">Idle</span>
+          </div>
+
+          <div class="watcher-meta-box">
+            <div>
+              <span class="field-label" style="margin-bottom:2px">Watched Directory</span>
+              <code class="mono-path" id="watcherPathText">data/watch_inbox</code>
+            </div>
+            <div class="watcher-metrics">
+              <span>Pending: <strong id="watcherPendingCount">0</strong></span>
+              <span>Auto-converted: <strong id="watcherProcessedCount">0</strong></span>
+            </div>
+          </div>
+
+          <label class="switch-row compact-switch" for="watcherEnableToggle" style="margin-top:14px">
+            <div>
+              <span class="switch-title">Enable Background Auto-Watch</span>
+              <span class="subtext">Uses your current Output Settings &amp; Studio Enhancements</span>
+            </div>
+            <input type="checkbox" id="watcherEnableToggle" class="toggle-checkbox" />
+          </label>
+
+          <div class="watcher-actions">
+            <button type="button" class="secondary-btn" id="watcherDropSampleBtn">Drop Sample Photo in Inbox</button>
+            <button type="button" class="primary-btn" id="watcherScanNowBtn">Scan Folder Now</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 3: PRESETS -->
     <section class="panel" id="panel-presets" role="tabpanel">
       <div class="section-topbar">
         <div>
           <h2>Conversion Presets</h2>
-          <p class="subtext">Apply a one-tap profile or save your current output settings as a reusable preset.</p>
+          <p class="subtext">Apply a one-tap profile or save your current settings &amp; enhancements.</p>
         </div>
         <button type="button" class="secondary-btn" id="toggleNewPresetBtn">+ Save Current Settings</button>
       </div>
 
       <form class="surface-card preset-form" id="newPresetForm" hidden>
         <div class="preset-form-grid">
-          <input type="text" id="presetNameInput" class="text-input" placeholder="Preset name (e.g., Blog Thumbnails)" required />
+          <input type="text" id="presetNameInput" class="text-input" placeholder="Preset name (e.g., Watermarked Social 4:5)" required />
           <input type="text" id="presetDescInput" class="text-input" placeholder="Short description (optional)" />
           <button type="submit" class="primary-btn">Save Preset</button>
         </div>
@@ -174,7 +372,7 @@
       <div class="presets-grid" id="presetsGrid"></div>
     </section>
 
-    <!-- TAB 3: HISTORY -->
+    <!-- TAB 4: HISTORY -->
     <section class="panel" id="panel-history" role="tabpanel">
       <div class="stats-strip">
         <div class="stat-tile">
@@ -195,6 +393,7 @@
         <div class="card-header history-toolbar">
           <input type="search" id="historySearchInput" class="text-input search-input" placeholder="Filter by filename or format..." />
           <div class="header-actions">
+            <button type="button" class="secondary-btn" id="exportHistoryPdfBtn" hidden>Export PDF</button>
             <button type="button" class="secondary-btn" id="downloadHistoryZipBtn" hidden>Download All (.zip)</button>
             <button type="button" class="ghost-btn danger-text" id="clearHistoryBtn">Clear History</button>
           </div>
@@ -203,6 +402,46 @@
       </div>
     </section>
   </main>
+
+  <!-- #1 Interactive Split-Screen Before/After Loupe Modal -->
+  <div class="modal-backdrop" id="loupeModal" hidden>
+    <div class="modal-sheet" role="dialog" aria-modal="true" aria-labelledby="loupeTitle">
+      <div class="modal-header">
+        <div>
+          <h2 id="loupeTitle">Before / After Split Loupe</h2>
+          <p class="subtext" id="loupeSubtitle">Drag the divider or zoom in to inspect compression &amp; enhancements.</p>
+        </div>
+        <div class="header-actions">
+          <div class="mini-seg" id="loupeZoomChips">
+            <button type="button" class="mini-seg-btn active" data-zoom="1">1&times;</button>
+            <button type="button" class="mini-seg-btn" data-zoom="2">2&times;</button>
+            <button type="button" class="mini-seg-btn" data-zoom="3">3&times;</button>
+            <button type="button" class="mini-seg-btn" data-zoom="4">4&times;</button>
+          </div>
+          <button type="button" class="ghost-btn" id="closeLoupeBtn">Close</button>
+        </div>
+      </div>
+
+      <div class="loupe-stage checkerboard" id="loupeStage">
+        <div class="loupe-zoom-inner" id="loupeZoomInner">
+          <img id="loupeAfterImg" class="loupe-img" alt="Converted preview" />
+          <div class="loupe-before-clip" id="loupeBeforeClip">
+            <img id="loupeBeforeImg" class="loupe-img" alt="Original preview" />
+          </div>
+        </div>
+        <div class="loupe-divider" id="loupeDivider" style="left: 50%">
+          <div class="loupe-knob">&harr;</div>
+        </div>
+        <span class="loupe-corner-tag left">Original</span>
+        <span class="loupe-corner-tag right" id="loupeAfterTag">Converted</span>
+      </div>
+
+      <div class="loupe-footer">
+        <input type="range" id="loupeSplitSlider" min="0" max="100" value="50" class="range-slider" aria-label="Split comparison position" />
+        <div class="loupe-metrics" id="loupeMetricsText">Calculating live preview...</div>
+      </div>
+    </div>
+  </div>
 
   <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 

@@ -46,6 +46,9 @@ class ConvertStore:
                     strip_exif INTEGER NOT NULL,
                     had_exif INTEGER NOT NULL,
                     exif_kept INTEGER NOT NULL,
+                    repaired_date INTEGER NOT NULL DEFAULT 0,
+                    srgb_normalized INTEGER NOT NULL DEFAULT 1,
+                    cutout_applied INTEGER NOT NULL DEFAULT 0,
                     sha256 TEXT NOT NULL,
                     output_path TEXT NOT NULL,
                     created_at TEXT NOT NULL
@@ -61,10 +64,40 @@ class ConvertStore:
                     resize_mode TEXT NOT NULL,
                     max_megapixels REAL NOT NULL,
                     max_edge_px INTEGER NOT NULL,
-                    strip_exif INTEGER NOT NULL
+                    strip_exif INTEGER NOT NULL,
+                    target_size_kb INTEGER NOT NULL DEFAULT 0,
+                    normalize_srgb INTEGER NOT NULL DEFAULT 1,
+                    remove_background INTEGER NOT NULL DEFAULT 0,
+                    aspect_ratio TEXT NOT NULL DEFAULT 'original',
+                    frame_mode TEXT NOT NULL DEFAULT 'blur',
+                    watermark_text TEXT NOT NULL DEFAULT '',
+                    rename_pattern TEXT NOT NULL DEFAULT '{orig}'
                 );
                 """
             )
+            # Safe schema migration for any existing local DB
+            conv_cols = {r["name"] for r in conn.execute("PRAGMA table_info(conversions)").fetchall()}
+            for col, default in (
+                ("repaired_date", "0"),
+                ("srgb_normalized", "1"),
+                ("cutout_applied", "0"),
+            ):
+                if col not in conv_cols:
+                    conn.execute(f"ALTER TABLE conversions ADD COLUMN {col} INTEGER NOT NULL DEFAULT {default}")
+
+            preset_cols = {r["name"] for r in conn.execute("PRAGMA table_info(custom_presets)").fetchall()}
+            migrations = [
+                ("target_size_kb", "INTEGER NOT NULL DEFAULT 0"),
+                ("normalize_srgb", "INTEGER NOT NULL DEFAULT 1"),
+                ("remove_background", "INTEGER NOT NULL DEFAULT 0"),
+                ("aspect_ratio", "TEXT NOT NULL DEFAULT 'original'"),
+                ("frame_mode", "TEXT NOT NULL DEFAULT 'blur'"),
+                ("watermark_text", "TEXT NOT NULL DEFAULT ''"),
+                ("rename_pattern", "TEXT NOT NULL DEFAULT '{orig}'"),
+            ]
+            for col, spec in migrations:
+                if col not in preset_cols:
+                    conn.execute(f"ALTER TABLE custom_presets ADD COLUMN {col} {spec}")
 
     def record_conversion(self, item: ConversionArtifact) -> dict:
         with self._lock, self._connect() as conn:
@@ -74,8 +107,9 @@ class ConvertStore:
                     id, original_filename, output_filename, original_format, output_format,
                     mime_type, orig_width, orig_height, out_width, out_height,
                     orig_bytes, out_bytes, saved_bytes, saved_pct, quality,
-                    strip_exif, had_exif, exif_kept, sha256, output_path, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    strip_exif, had_exif, exif_kept, repaired_date, srgb_normalized,
+                    cutout_applied, sha256, output_path, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     item.id,
@@ -96,6 +130,9 @@ class ConvertStore:
                     int(item.strip_exif),
                     int(item.had_exif),
                     int(item.exif_kept),
+                    int(item.repaired_date),
+                    int(item.srgb_normalized),
+                    int(item.cutout_applied),
                     item.sha256,
                     item.output_path,
                     item.created_at,
@@ -125,6 +162,9 @@ class ConvertStore:
             "strip_exif": bool(row["strip_exif"]),
             "had_exif": bool(row["had_exif"]),
             "exif_kept": bool(row["exif_kept"]),
+            "repaired_date": bool(row["repaired_date"]),
+            "srgb_normalized": bool(row["srgb_normalized"]),
+            "cutout_applied": bool(row["cutout_applied"]),
             "sha256": row["sha256"],
             "created_at": row["created_at"],
             "preview_url": f"/api/files/{item_id}",
@@ -152,6 +192,9 @@ class ConvertStore:
             "strip_exif": item.strip_exif,
             "had_exif": item.had_exif,
             "exif_kept": item.exif_kept,
+            "repaired_date": item.repaired_date,
+            "srgb_normalized": item.srgb_normalized,
+            "cutout_applied": item.cutout_applied,
             "sha256": item.sha256,
             "created_at": item.created_at,
             "preview_url": f"/api/files/{item.id}",
@@ -187,8 +230,7 @@ class ConvertStore:
             if row is None:
                 return False
             conn.execute("DELETE FROM conversions WHERE id = ?", (item_id,))
-        path = Path(row["output_path"])
-        path.unlink(missing_ok=True)
+        Path(row["output_path"]).unlink(missing_ok=True)
         return True
 
     def clear_history(self) -> int:
@@ -240,6 +282,13 @@ class ConvertStore:
                     max_megapixels=row["max_megapixels"],
                     max_edge_px=row["max_edge_px"],
                     strip_exif=bool(row["strip_exif"]),
+                    target_size_kb=int(row["target_size_kb"]),
+                    normalize_srgb=bool(row["normalize_srgb"]),
+                    remove_background=bool(row["remove_background"]),
+                    aspect_ratio=row["aspect_ratio"],
+                    frame_mode=row["frame_mode"],
+                    watermark_text=row["watermark_text"],
+                    rename_pattern=row["rename_pattern"],
                     built_in=False,
                 ).to_dict()
             )
@@ -255,6 +304,13 @@ class ConvertStore:
         max_megapixels: float,
         max_edge_px: int,
         strip_exif: bool,
+        target_size_kb: int = 0,
+        normalize_srgb: bool = True,
+        remove_background: bool = False,
+        aspect_ratio: str = "original",
+        frame_mode: str = "blur",
+        watermark_text: str = "",
+        rename_pattern: str = "{orig}",
     ) -> dict:
         preset_id = f"custom-{uuid.uuid4().hex[:8]}"
         profile = PresetProfile(
@@ -268,6 +324,13 @@ class ConvertStore:
             max_megapixels=max_megapixels,
             max_edge_px=max_edge_px,
             strip_exif=strip_exif,
+            target_size_kb=target_size_kb,
+            normalize_srgb=normalize_srgb,
+            remove_background=remove_background,
+            aspect_ratio=aspect_ratio,  # type: ignore[arg-type]
+            frame_mode=frame_mode,  # type: ignore[arg-type]
+            watermark_text=watermark_text,
+            rename_pattern=rename_pattern,
             built_in=False,
         )
         with self._lock, self._connect() as conn:
@@ -275,8 +338,10 @@ class ConvertStore:
                 """
                 INSERT INTO custom_presets (
                     id, name, description, badge, output_format, quality,
-                    resize_mode, max_megapixels, max_edge_px, strip_exif
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    resize_mode, max_megapixels, max_edge_px, strip_exif,
+                    target_size_kb, normalize_srgb, remove_background,
+                    aspect_ratio, frame_mode, watermark_text, rename_pattern
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     profile.id,
@@ -289,6 +354,13 @@ class ConvertStore:
                     profile.max_megapixels,
                     profile.max_edge_px,
                     int(profile.strip_exif),
+                    profile.target_size_kb,
+                    int(profile.normalize_srgb),
+                    int(profile.remove_background),
+                    profile.aspect_ratio,
+                    profile.frame_mode,
+                    profile.watermark_text,
+                    profile.rename_pattern,
                 ),
             )
         return profile.to_dict()
