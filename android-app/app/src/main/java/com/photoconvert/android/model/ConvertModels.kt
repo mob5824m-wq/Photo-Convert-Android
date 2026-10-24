@@ -285,6 +285,21 @@ object DefaultPresets {
             watermarkTiled = true
         ),
         PresetProfile(
+            id = "scan-deskew",
+            name = "Document Scan & Auto-Deskew",
+            description = "Auto-crops and 4-corner deskews tilted pages with crisp monochrome auto-levels.",
+            badge = "Doc Scan",
+            format = OutputFormat.JPEG,
+            quality = 86,
+            resizePreset = ResizePreset.CUSTOM_EDGE,
+            customMaxEdgePx = 2400,
+            exifPrivacyMode = ExifPrivacyMode.STRIP_ALL,
+            autoDeskew = true,
+            postSharpen = true,
+            autoLevels = true,
+            grayscale = true
+        ),
+        PresetProfile(
             id = "social-4x5-blur",
             name = "Social 4:5 Blurred Frame",
             description = "Frames any photo onto a 4:5 portrait canvas with a soft-blurred backdrop.",

@@ -115,7 +115,7 @@ class DimensionCalculatorTest {
 
     @Test
     fun defaultPresetsCoverAllCapabilities() {
-        assertEquals(9, DefaultPresets.list.size)
+        assertEquals(10, DefaultPresets.list.size)
         assertTrue(DefaultPresets.list.any { it.targetSizeKb == 500 })
         assertTrue(DefaultPresets.list.any { it.removeBackground })
         assertTrue(DefaultPresets.list.any { it.autoDeskew })
