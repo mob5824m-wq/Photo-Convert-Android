@@ -1,0 +1,22 @@
+# Build & runtime artifacts
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Runtime conversion workspace
+data/
+dist-apk/
+
+# Android / Gradle
+android-app/.gradle/
+android-app/build/
+android-app/app/build/
+android-app/local.properties
+*.apk
+*.aab
+*.iml
+.idea/
+.DS_Store

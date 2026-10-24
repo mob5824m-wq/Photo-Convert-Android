@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#2563eb" />
+  <title>Photo Convert — Clean Batch Image Optimizer</title>
+  <link rel="icon" type="image/png" href="/favicon.png" />
+  <link rel="manifest" href="/manifest.json" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="3" width="18" height="18" rx="5"></rect>
+            <circle cx="8.5" cy="8.5" r="1.5"></circle>
+            <path d="M21 15l-5-5L5 21"></path>
+          </svg>
+        </div>
+        <div>
+          <span class="brand-name">Photo Convert</span>
+          <span class="version-tag" id="versionTag">v1.0.0</span>
+        </div>
+      </div>
+
+      <nav class="segmented-tabs" role="tablist" aria-label="Primary sections">
+        <button class="seg-tab active" data-tab="convert" role="tab" aria-selected="true">Convert</button>
+        <button class="seg-tab" data-tab="presets" role="tab" aria-selected="false">Presets</button>
+        <button class="seg-tab" data-tab="history" role="tab" aria-selected="false">
+          History
+          <span class="tab-count" id="historyCountPill">0</span>
+        </button>
+      </nav>
+
+      <div class="topbar-end">
+        <span class="saved-pill" id="lifetimeSavedPill" title="Total storage saved">0 B saved</span>
+        <button class="icon-button" id="themeToggleBtn" aria-label="Toggle color theme" title="Toggle light/dark mode">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+          </svg>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main class="shell">
+    <!-- TAB 1: CONVERT -->
+    <section class="panel active" id="panel-convert" role="tabpanel">
+      <div class="convert-grid">
+        <!-- Left: Dropzone & Selected Queue -->
+        <div class="surface-card drop-card">
+          <div class="card-header">
+            <div>
+              <h2>Photos</h2>
+              <p class="subtext">Drop JPG, PNG, WebP, TIFF, or BMP images to convert locally.</p>
+            </div>
+            <button class="ghost-btn" id="clearQueueBtn" hidden>Clear queue</button>
+          </div>
+
+          <div class="dropzone" id="dropzone" tabindex="0" role="button" aria-label="Select photos to convert">
+            <input type="file" id="fileInput" multiple accept="image/*" hidden />
+            <div class="dropzone-glyph">
+              <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                <polyline points="17 8 12 3 7 8"></polyline>
+                <line x1="12" y1="3" x2="12" y2="15"></line>
+              </svg>
+            </div>
+            <p class="dropzone-headline">Drop photos here or <span>browse device</span></p>
+            <p class="dropzone-caption">Batch-convert multiple high-resolution photos at once</p>
+          </div>
+
+          <div class="queue-list" id="queueList" hidden></div>
+
+          <div class="sample-bar">
+            <span class="subtext">Want a quick test?</span>
+            <button class="text-action" id="runSampleBtn" type="button">Convert 3 sample high-res photos &rarr;</button>
+          </div>
+        </div>
+
+        <!-- Right: Clean Conversion Controls -->
+        <div class="surface-card settings-card">
+          <div class="card-header">
+            <div>
+              <h2>Output Settings</h2>
+              <p class="subtext" id="activePresetLabel">Custom configuration</p>
+            </div>
+          </div>
+
+          <div class="field-group">
+            <label class="field-label">Format</label>
+            <div class="chip-row" id="formatChips">
+              <button type="button" class="choice-chip active" data-format="webp">WebP</button>
+              <button type="button" class="choice-chip" data-format="jpeg">JPEG</button>
+              <button type="button" class="choice-chip" data-format="png">PNG</button>
+              <button type="button" class="choice-chip" data-format="tiff">TIFF</button>
+              <button type="button" class="choice-chip" data-format="bmp">BMP</button>
+            </div>
+          </div>
+
+          <div class="field-group" id="qualityGroup">
+            <div class="field-row">
+              <label class="field-label" for="qualitySlider">Quality</label>
+              <span class="value-badge" id="qualityBadge">85%</span>
+            </div>
+            <input type="range" id="qualitySlider" min="10" max="100" value="85" class="range-slider" />
+          </div>
+
+          <div class="field-group">
+            <label class="field-label">Dimensions</label>
+            <div class="chip-row" id="resizeChips">
+              <button type="button" class="choice-chip active" data-resize="original">Original</button>
+              <button type="button" class="choice-chip" data-resize="mp16">16 MP</button>
+              <button type="button" class="choice-chip" data-resize="edge3840">4K</button>
+              <button type="button" class="choice-chip" data-resize="edge1920">1080p</button>
+              <button type="button" class="choice-chip" data-resize="custom">Custom</button>
+            </div>
+            <div class="custom-edge-wrap" id="customEdgeWrap" hidden>
+              <label for="customEdgeInput" class="subtext">Max long edge (px)</label>
+              <input type="number" id="customEdgeInput" min="128" max="16384" value="2048" class="text-input compact-input" />
+            </div>
+          </div>
+
+          <label class="switch-row" for="stripExifToggle">
+            <div>
+              <span class="switch-title">Strip EXIF &amp; GPS metadata</span>
+              <span class="subtext">Removes location coordinates and camera serials</span>
+            </div>
+            <input type="checkbox" id="stripExifToggle" class="toggle-checkbox" checked />
+          </label>
+
+          <button type="button" class="primary-btn full-btn" id="convertBtn" disabled>
+            Select Photos to Convert
+          </button>
+        </div>
+      </div>
+
+      <!-- Latest Batch Results -->
+      <div class="surface-card results-section" id="batchResultsCard" hidden>
+        <div class="card-header">
+          <div>
+            <h2>Converted Batch</h2>
+            <p class="subtext" id="batchSummaryText"></p>
+          </div>
+          <div class="header-actions">
+            <button type="button" class="secondary-btn" id="downloadBatchZipBtn">Download All (.zip)</button>
+          </div>
+        </div>
+        <div class="results-list" id="batchResultsList"></div>
+      </div>
+    </section>
+
+    <!-- TAB 2: PRESETS -->
+    <section class="panel" id="panel-presets" role="tabpanel">
+      <div class="section-topbar">
+        <div>
+          <h2>Conversion Presets</h2>
+          <p class="subtext">Apply a one-tap profile or save your current output settings as a reusable preset.</p>
+        </div>
+        <button type="button" class="secondary-btn" id="toggleNewPresetBtn">+ Save Current Settings</button>
+      </div>
+
+      <form class="surface-card preset-form" id="newPresetForm" hidden>
+        <div class="preset-form-grid">
+          <input type="text" id="presetNameInput" class="text-input" placeholder="Preset name (e.g., Blog Thumbnails)" required />
+          <input type="text" id="presetDescInput" class="text-input" placeholder="Short description (optional)" />
+          <button type="submit" class="primary-btn">Save Preset</button>
+        </div>
+      </form>
+
+      <div class="presets-grid" id="presetsGrid"></div>
+    </section>
+
+    <!-- TAB 3: HISTORY -->
+    <section class="panel" id="panel-history" role="tabpanel">
+      <div class="stats-strip">
+        <div class="stat-tile">
+          <span class="stat-label">Converted Photos</span>
+          <strong class="stat-value" id="statTotalCount">0</strong>
+        </div>
+        <div class="stat-tile">
+          <span class="stat-label">Space Saved</span>
+          <strong class="stat-value accent" id="statSavedBytes">0 B</strong>
+        </div>
+        <div class="stat-tile">
+          <span class="stat-label">Average Reduction</span>
+          <strong class="stat-value" id="statAvgPct">0%</strong>
+        </div>
+      </div>
+
+      <div class="surface-card">
+        <div class="card-header history-toolbar">
+          <input type="search" id="historySearchInput" class="text-input search-input" placeholder="Filter by filename or format..." />
+          <div class="header-actions">
+            <button type="button" class="secondary-btn" id="downloadHistoryZipBtn" hidden>Download All (.zip)</button>
+            <button type="button" class="ghost-btn danger-text" id="clearHistoryBtn">Clear History</button>
+          </div>
+        </div>
+        <div class="results-list" id="historyList"></div>
+      </div>
+    </section>
+  </main>
+
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+  <script type="module" src="/js/app.js"></script>
+</body>
+</html>
