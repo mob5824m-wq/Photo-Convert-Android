@@ -7,8 +7,8 @@ __pycache__/
 .mypy_cache/
 
 # Runtime conversion workspace
-data/
-dist-apk/
+/data/
+/dist-apk/
 
 # Android / Gradle
 android-app/.gradle/
