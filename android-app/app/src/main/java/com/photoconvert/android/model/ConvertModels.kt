@@ -1,5 +1,6 @@
 package com.photoconvert.android.model
 
+import java.io.File
 import java.util.Locale
 
 enum class OutputFormat(
@@ -34,6 +35,28 @@ enum class ResizePreset(
     companion object {
         fun fromId(id: String): ResizePreset =
             entries.firstOrNull { it.id.equals(id, ignoreCase = true) } ?: ORIGINAL
+    }
+}
+
+enum class ExifPrivacyMode(val id: String, val label: String, val subtitle: String) {
+    STRIP_ALL("strip_all", "Strip All", "Removes all EXIF, GPS coordinates & camera serials"),
+    SCRUB_GPS_ONLY("gps_only", "Scrub GPS Only", "Removes GPS & serials; keeps camera, lens & capture date"),
+    KEEP_ALL("keep_all", "Keep All", "Preserves camera EXIF, timestamps & GPS location");
+
+    companion object {
+        fun fromId(id: String): ExifPrivacyMode =
+            entries.firstOrNull { it.id.equals(id, ignoreCase = true) } ?: STRIP_ALL
+    }
+}
+
+enum class RedactStyle(val id: String, val label: String) {
+    BLUR("blur", "Blur"),
+    PIXELATE("pixelate", "Pixelate"),
+    SOLID("solid", "Solid Bar");
+
+    companion object {
+        fun fromId(id: String): RedactStyle =
+            entries.firstOrNull { it.id.equals(id, ignoreCase = true) } ?: BLUR
     }
 }
 
@@ -92,25 +115,53 @@ enum class PdfMargin(val id: String, val label: String, val paddingPt: Int) {
     STANDARD("standard", "Standard", 48)
 }
 
+enum class CollageLayout(val id: String, val label: String, val cols: Int, val rows: Int) {
+    SIDE_BY_SIDE_2X1("2x1", "2×1 Side-by-Side", 2, 1),
+    STACKED_1X2("1x2", "1×2 Stacked", 1, 2),
+    ID_CARD_2UP("id_card_2up", "ID Card 2-Up", 1, 2),
+    GRID_2X2("2x2", "2×2 Grid", 2, 2),
+    SHEET_3X3("3x3", "3×3 Sheet", 3, 3);
+
+    companion object {
+        fun fromId(id: String): CollageLayout =
+            entries.firstOrNull { it.id.equals(id, ignoreCase = true) } ?: GRID_2X2
+    }
+}
+
 data class ConvertSettings(
     val format: OutputFormat = OutputFormat.WEBP,
     val quality: Int = 85,
-    val targetSizeKb: Int = 0, // 0 = Quality %, >0 = Fit under exact KB ceiling (#2)
+    val targetSizeKb: Int = 0,
     val resizePreset: ResizePreset = ResizePreset.ORIGINAL,
     val customMaxEdgePx: Int = 2048,
-    val stripExif: Boolean = true,
-    val repairFilenameDates: Boolean = true, // (#8)
-    val normalizeSrgb: Boolean = true, // (#9)
-    val removeBackground: Boolean = false, // (#10)
-    val aspectRatio: AspectRatioOption = AspectRatioOption.ORIGINAL, // (#7)
-    val frameFillMode: FrameFillMode = FrameFillMode.BLUR_BACKDROP, // (#7)
-    val watermarkText: String = "", // (#6)
-    val watermarkAnchor: WatermarkAnchor = WatermarkAnchor.BOTTOM_RIGHT, // (#6)
-    val watermarkOpacity: Int = 65, // (#6)
-    val renamePattern: String = "{orig}", // (#8)
+    val exifPrivacyMode: ExifPrivacyMode = ExifPrivacyMode.STRIP_ALL,
+    val exifArtist: String = "",
+    val exifCopyright: String = "",
+    val repairFilenameDates: Boolean = true,
+    val normalizeSrgb: Boolean = true,
+    val removeBackground: Boolean = false,
+    val autoDeskew: Boolean = false,
+    val postSharpen: Boolean = false,
+    val autoLevels: Boolean = false,
+    val grayscale: Boolean = false,
+    val redactFaces: Boolean = false,
+    val redactText: Boolean = false,
+    val redactBoxesSpec: String = "",
+    val redactStyle: RedactStyle = RedactStyle.BLUR,
+    val aspectRatio: AspectRatioOption = AspectRatioOption.ORIGINAL,
+    val frameFillMode: FrameFillMode = FrameFillMode.BLUR_BACKDROP,
+    val watermarkText: String = "",
+    val watermarkLogoUriString: String = "",
+    val watermarkAnchor: WatermarkAnchor = WatermarkAnchor.BOTTOM_RIGHT,
+    val watermarkOpacity: Int = 65,
+    val watermarkTiled: Boolean = false,
+    val renamePattern: String = "{orig}",
     val presetSlug: String = "custom",
     val activePresetName: String = "Custom configuration"
 ) {
+    val stripExif: Boolean
+        get() = exifPrivacyMode == ExifPrivacyMode.STRIP_ALL
+
     fun clampedQuality(): Int = quality.coerceIn(10, 100)
     fun clampedCustomEdge(): Int = customMaxEdgePx.coerceIn(128, 16384)
     fun clampedWatermarkOpacity(): Int = watermarkOpacity.coerceIn(15, 100)
@@ -118,11 +169,18 @@ data class ConvertSettings(
     fun effectiveFormat(): OutputFormat =
         if (removeBackground && !format.supportsAlpha) OutputFormat.WEBP else format
 
+    fun customRedactBoxCount(): Int =
+        redactBoxesSpec.split(';').count { it.isNotBlank() }
+
     fun activeEnhancementCount(): Int {
         var count = 0
         if (removeBackground) count++
+        if (autoDeskew) count++
+        if (postSharpen || autoLevels || grayscale) count++
+        if (redactFaces || redactText || redactBoxesSpec.isNotBlank()) count++
         if (aspectRatio != AspectRatioOption.ORIGINAL) count++
-        if (watermarkText.isNotBlank()) count++
+        if (watermarkText.isNotBlank() || watermarkLogoUriString.isNotBlank()) count++
+        if (exifArtist.isNotBlank() || exifCopyright.isNotBlank()) count++
         if (renamePattern.trim().ifBlank { "{orig}" } != "{orig}") count++
         return count
     }
@@ -137,13 +195,18 @@ data class PresetProfile(
     val quality: Int,
     val resizePreset: ResizePreset,
     val customMaxEdgePx: Int = 2048,
-    val stripExif: Boolean = true,
+    val exifPrivacyMode: ExifPrivacyMode = ExifPrivacyMode.STRIP_ALL,
     val targetSizeKb: Int = 0,
     val normalizeSrgb: Boolean = true,
     val removeBackground: Boolean = false,
+    val autoDeskew: Boolean = false,
+    val postSharpen: Boolean = false,
+    val autoLevels: Boolean = false,
+    val grayscale: Boolean = false,
     val aspectRatio: AspectRatioOption = AspectRatioOption.ORIGINAL,
     val frameFillMode: FrameFillMode = FrameFillMode.BLUR_BACKDROP,
     val watermarkText: String = "",
+    val watermarkTiled: Boolean = false,
     val renamePattern: String = "{orig}",
     val builtIn: Boolean = true
 ) {
@@ -153,12 +216,17 @@ data class PresetProfile(
         targetSizeKb = targetSizeKb,
         resizePreset = resizePreset,
         customMaxEdgePx = customMaxEdgePx,
-        stripExif = stripExif,
+        exifPrivacyMode = exifPrivacyMode,
         normalizeSrgb = normalizeSrgb,
         removeBackground = removeBackground,
+        autoDeskew = autoDeskew,
+        postSharpen = postSharpen,
+        autoLevels = autoLevels,
+        grayscale = grayscale,
         aspectRatio = aspectRatio,
         frameFillMode = frameFillMode,
         watermarkText = watermarkText,
+        watermarkTiled = watermarkTiled,
         renamePattern = renamePattern,
         presetSlug = id,
         activePresetName = "Preset: $name"
@@ -170,13 +238,14 @@ object DefaultPresets {
         PresetProfile(
             id = "web-webp",
             name = "Web & Messaging WebP",
-            description = "Crisp 2048px sRGB WebP at 82% quality with private metadata removed.",
+            description = "Crisp 2048px sRGB WebP at 82% quality with micro-sharpening and metadata removed.",
             badge = "Smallest Size",
             format = OutputFormat.WEBP,
             quality = 82,
             resizePreset = ResizePreset.CUSTOM_EDGE,
             customMaxEdgePx = 2048,
-            stripExif = true
+            exifPrivacyMode = ExifPrivacyMode.STRIP_ALL,
+            postSharpen = true
         ),
         PresetProfile(
             id = "portal-under-500kb",
@@ -187,8 +256,33 @@ object DefaultPresets {
             quality = 88,
             resizePreset = ResizePreset.CUSTOM_EDGE,
             customMaxEdgePx = 2400,
-            stripExif = true,
+            exifPrivacyMode = ExifPrivacyMode.STRIP_ALL,
             targetSizeKb = 500
+        ),
+        PresetProfile(
+            id = "safe-social-no-gps",
+            name = "Safe Social (Scrub GPS Only)",
+            description = "Strips GPS coordinates & device serials while keeping camera, lens & capture date.",
+            badge = "GPS Scrubbed",
+            format = OutputFormat.WEBP,
+            quality = 86,
+            resizePreset = ResizePreset.CUSTOM_EDGE,
+            customMaxEdgePx = 2560,
+            exifPrivacyMode = ExifPrivacyMode.SCRUB_GPS_ONLY,
+            postSharpen = true
+        ),
+        PresetProfile(
+            id = "client-proof-tiled",
+            name = "Client Proof (45° Tiled Watermark)",
+            description = "1920px preview JPEG with repeating diagonal proof watermark and auto-levels.",
+            badge = "Proof Grid",
+            format = OutputFormat.JPEG,
+            quality = 84,
+            resizePreset = ResizePreset.FHD_1080P,
+            exifPrivacyMode = ExifPrivacyMode.STRIP_ALL,
+            autoLevels = true,
+            watermarkText = "© PROOF PREVIEW",
+            watermarkTiled = true
         ),
         PresetProfile(
             id = "social-4x5-blur",
@@ -199,7 +293,7 @@ object DefaultPresets {
             quality = 88,
             resizePreset = ResizePreset.CUSTOM_EDGE,
             customMaxEdgePx = 2160,
-            stripExif = true,
+            exifPrivacyMode = ExifPrivacyMode.STRIP_ALL,
             aspectRatio = AspectRatioOption.PORTRAIT_4_5,
             frameFillMode = FrameFillMode.BLUR_BACKDROP
         ),
@@ -212,7 +306,7 @@ object DefaultPresets {
             quality = 90,
             resizePreset = ResizePreset.CUSTOM_EDGE,
             customMaxEdgePx = 2048,
-            stripExif = true,
+            exifPrivacyMode = ExifPrivacyMode.STRIP_ALL,
             removeBackground = true
         ),
         PresetProfile(
@@ -223,7 +317,7 @@ object DefaultPresets {
             format = OutputFormat.JPEG,
             quality = 85,
             resizePreset = ResizePreset.MP_16,
-            stripExif = false
+            exifPrivacyMode = ExifPrivacyMode.KEEP_ALL
         ),
         PresetProfile(
             id = "uhd-4k-webp",
@@ -233,7 +327,7 @@ object DefaultPresets {
             format = OutputFormat.WEBP,
             quality = 90,
             resizePreset = ResizePreset.UHD_4K,
-            stripExif = false
+            exifPrivacyMode = ExifPrivacyMode.KEEP_ALL
         ),
         PresetProfile(
             id = "lossless-png",
@@ -243,10 +337,32 @@ object DefaultPresets {
             format = OutputFormat.PNG,
             quality = 100,
             resizePreset = ResizePreset.ORIGINAL,
-            stripExif = true
+            exifPrivacyMode = ExifPrivacyMode.STRIP_ALL
         )
     )
 }
+
+data class ExifInspectionReport(
+    val filename: String,
+    val format: String,
+    val width: Int,
+    val height: Int,
+    val bytes: Long,
+    val hasGps: Boolean,
+    val gpsSummary: String,
+    val sharpnessScore: Double,
+    val dHashHex: String,
+    val paletteHex: List<String>,
+    val tags: List<Pair<String, String>>
+)
+
+data class WebPackBundleResult(
+    val zipFile: File,
+    val baseName: String,
+    val breakpoints: List<Int>,
+    val paletteHex: List<String>,
+    val htmlSnippet: String
+)
 
 data class ConvertedItem(
     val id: String,
@@ -264,8 +380,10 @@ data class ConvertedItem(
     val savedBytes: Long,
     val savedPct: Double,
     val exifKept: Boolean,
+    val exifPrivacyMode: String = "strip_all",
     val repairedDate: Boolean = false,
     val cutoutApplied: Boolean = false,
+    val redactedRegions: Int = 0,
     val localFilePath: String,
     val createdAtEpochMs: Long
 )

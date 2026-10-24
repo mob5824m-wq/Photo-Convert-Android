@@ -28,7 +28,7 @@
 
       <nav class="segmented-tabs" role="tablist" aria-label="Primary sections">
         <button class="seg-tab active" data-tab="convert" role="tab" aria-selected="true">Convert</button>
-        <button class="seg-tab" data-tab="tools" role="tab" aria-selected="false">PDF &amp; Watch</button>
+        <button class="seg-tab" data-tab="tools" role="tab" aria-selected="false">PDF &amp; Tools</button>
         <button class="seg-tab" data-tab="presets" role="tab" aria-selected="false">Presets</button>
         <button class="seg-tab" data-tab="history" role="tab" aria-selected="false">
           History
@@ -58,7 +58,10 @@
               <h2>Photos</h2>
               <p class="subtext">Drop JPG, PNG, WebP, AVIF, HEIC, TIFF, BMP, or RAW (DNG/CR2/NEF/ARW).</p>
             </div>
-            <button class="ghost-btn" id="clearQueueBtn" hidden>Clear queue</button>
+            <div class="header-actions">
+              <button class="secondary-btn compact-btn" id="dedupeQueueBtn" hidden title="Detect near-identical burst photos via dHash + sharpness">De-dupe Burst</button>
+              <button class="ghost-btn" id="clearQueueBtn" hidden>Clear queue</button>
+            </div>
           </div>
 
           <div class="dropzone" id="dropzone" tabindex="0" role="button" aria-label="Select photos to convert">
@@ -71,13 +74,17 @@
               </svg>
             </div>
             <p class="dropzone-headline">Drop photos here or <span>browse device</span></p>
-            <p class="dropzone-caption">Supports standard formats, 10-bit AVIF/HEIC &amp; camera RAW files</p>
+            <p class="dropzone-caption">Inspect EXIF/palette, de-dupe bursts, or open the Before/After Loupe</p>
           </div>
 
           <div class="queue-list" id="queueList" hidden></div>
 
           <div class="sample-bar">
-            <button class="text-action" id="openSampleLoupeBtn" type="button">Compare Before/After Loupe</button>
+            <div class="header-actions">
+              <button class="text-action" id="openSampleLoupeBtn" type="button">Before/After Loupe</button>
+              <span class="subtext">&middot;</span>
+              <button class="text-action" id="openSampleInspectorBtn" type="button">Inspect Sample EXIF</button>
+            </div>
             <button class="text-action" id="runSampleBtn" type="button">Convert 3 sample photos &rarr;</button>
           </div>
         </div>
@@ -104,7 +111,7 @@
             </div>
           </div>
 
-          <!-- Compression Mode: Quality % vs Exact Target File Size (#2) -->
+          <!-- Compression Mode: Quality % vs Exact Target File Size -->
           <div class="field-group">
             <div class="field-row">
               <div class="mini-seg" id="compressionModeTabs">
@@ -147,16 +154,17 @@
             </div>
           </div>
 
-          <!-- Privacy, Date Repair (#8) & Wide-Gamut sRGB (#9) -->
-          <div class="toggles-stack">
-            <label class="switch-row compact-switch" for="stripExifToggle">
-              <div>
-                <span class="switch-title">Strip EXIF &amp; GPS metadata</span>
-                <span class="subtext">Removes location coordinates and camera identifiers</span>
-              </div>
-              <input type="checkbox" id="stripExifToggle" class="toggle-checkbox" checked />
-            </label>
+          <!-- Selective EXIF Privacy Scrubber (#2), Date Repair & Wide-Gamut sRGB -->
+          <div class="field-group">
+            <label class="field-label">EXIF &amp; GPS Privacy</label>
+            <div class="chip-row" id="exifPrivacyChips">
+              <button type="button" class="choice-chip active" data-exif-mode="strip_all">Strip All</button>
+              <button type="button" class="choice-chip" data-exif-mode="gps_only">Scrub GPS Only</button>
+              <button type="button" class="choice-chip" data-exif-mode="keep_all">Keep All</button>
+            </div>
+          </div>
 
+          <div class="toggles-stack">
             <label class="switch-row compact-switch" id="repairDateRow" for="repairDatesToggle" hidden>
               <div>
                 <span class="switch-title">Repair missing capture dates</span>
@@ -174,15 +182,14 @@
             </label>
           </div>
 
-          <!-- Progressive Disclosure: Studio Enhancements (#6, #7, #8, #10) -->
+          <!-- Progressive Disclosure: Studio Enhancements -->
           <details class="studio-drawer" id="studioDrawer">
             <summary class="studio-summary">
-              <span>Studio Enhancements</span>
+              <span>Studio Enhancements &amp; Redaction</span>
               <span class="value-badge" id="enhancementsCountBadge">Off</span>
             </summary>
 
             <div class="studio-body">
-              <!-- #10 Offline Subject Cutout -->
               <label class="switch-row compact-switch" for="cutoutToggle">
                 <div>
                   <span class="switch-title">Offline Subject Cutout</span>
@@ -190,6 +197,41 @@
                 </div>
                 <input type="checkbox" id="cutoutToggle" class="toggle-checkbox" />
               </label>
+
+              <label class="switch-row compact-switch" for="deskewToggle">
+                <div>
+                  <span class="switch-title">Auto-Crop &amp; 4-Corner Scan Deskew</span>
+                  <span class="subtext">Trims borders and straightens angled document pages</span>
+                </div>
+                <input type="checkbox" id="deskewToggle" class="toggle-checkbox" />
+              </label>
+
+              <!-- #6 Tone & Micro-Sharpening -->
+              <div class="sub-field">
+                <label class="field-label">Tone &amp; Detail</label>
+                <div class="chip-row" id="toneChips">
+                  <button type="button" class="choice-chip" data-tone="sharpen">Post-Resize Sharpen</button>
+                  <button type="button" class="choice-chip" data-tone="levels">Auto-Levels</button>
+                  <button type="button" class="choice-chip" data-tone="grayscale">Monochrome</button>
+                </div>
+              </div>
+
+              <!-- #1 Smart Privacy Blur & Redaction -->
+              <div class="sub-field">
+                <label class="field-label">Smart Privacy Blur &amp; Redaction</label>
+                <div class="chip-row" id="redactTargetChips">
+                  <button type="button" class="choice-chip" data-redact="faces">Blur Faces</button>
+                  <button type="button" class="choice-chip" data-redact="text">Blur Text / Numbers</button>
+                </div>
+                <div class="chip-row" id="redactStyleChips" style="margin-top:8px">
+                  <button type="button" class="choice-chip active" data-rstyle="blur">Gaussian Blur</button>
+                  <button type="button" class="choice-chip" data-rstyle="pixelate">Pixelate</button>
+                  <button type="button" class="choice-chip" data-rstyle="solid">Solid Bar</button>
+                </div>
+                <p class="subtext" id="customRedactBoxesHint" style="margin-top:6px">
+                  Tip: Open the Before/After Loupe to drag custom redaction boxes.
+                </p>
+              </div>
 
               <!-- #7 Smart Aspect-Ratio Framing -->
               <div class="sub-field">
@@ -209,10 +251,16 @@
                 </div>
               </div>
 
-              <!-- #6 Batch Watermark -->
+              <!-- #7 Text + Logo Watermark + 45° Tiled Proof -->
               <div class="sub-field">
-                <label class="field-label" for="watermarkTextInput">Watermark Overlay</label>
+                <label class="field-label" for="watermarkTextInput">Watermark &amp; Brand Logo</label>
                 <input type="text" id="watermarkTextInput" class="text-input" placeholder="Optional text (e.g., © 2026 Studio)" maxlength="80" />
+                <div class="logo-picker-row">
+                  <input type="file" id="watermarkLogoInput" accept="image/png,image/webp,image/*" hidden />
+                  <button type="button" class="secondary-btn compact-btn" id="pickLogoBtn">+ Logo PNG/WebP</button>
+                  <span class="subtext" id="logoFilenameLabel">No logo selected</span>
+                  <button type="button" class="ghost-btn compact-btn" id="clearLogoBtn" hidden>&times;</button>
+                </div>
                 <div class="watermark-extra" id="watermarkExtraWrap" hidden>
                   <select id="watermarkPosSelect" class="text-input">
                     <option value="bottom-right">Bottom Right</option>
@@ -226,9 +274,25 @@
                     <input type="range" id="watermarkOpacitySlider" min="15" max="100" value="65" class="range-slider" />
                   </div>
                 </div>
+                <label class="switch-row compact-switch" id="watermarkTiledRow" for="watermarkTiledToggle" style="margin-top:8px" hidden>
+                  <div>
+                    <span class="switch-title">45&deg; Diagonal Tiled Proof Grid</span>
+                    <span class="subtext">Repeats watermark across entire photo</span>
+                  </div>
+                  <input type="checkbox" id="watermarkTiledToggle" class="toggle-checkbox" />
+                </label>
               </div>
 
-              <!-- #8 Token Batch Renaming -->
+              <!-- #2 Custom EXIF Authorship Tags -->
+              <div class="sub-field">
+                <label class="field-label">Embed EXIF Authorship (Optional)</label>
+                <div class="two-col-inputs">
+                  <input type="text" id="exifArtistInput" class="text-input" placeholder="Artist / Creator" maxlength="80" />
+                  <input type="text" id="exifCopyrightInput" class="text-input" placeholder="Copyright notice" maxlength="120" />
+                </div>
+              </div>
+
+              <!-- Token Batch Renaming -->
               <div class="sub-field">
                 <label class="field-label" for="renamePatternInput">Batch Rename Template</label>
                 <input type="text" id="renamePatternInput" class="text-input mono-input" value="{orig}" placeholder="{date}_{orig}_{seq}" />
@@ -265,15 +329,15 @@
       </div>
     </section>
 
-    <!-- TAB 2: PDF BUILDER (#3) & WATCHED FOLDER (#4) -->
+    <!-- TAB 2: PDF, WATCHED FOLDER, COLLAGE, ANIMATION & WEBPACK -->
     <section class="panel" id="panel-tools" role="tabpanel">
-      <div class="convert-grid">
-        <!-- #3 Batch Photo-to-PDF & Scan Sheet Exporter -->
+      <div class="tools-grid">
+        <!-- Card 1: Batch Photo-to-PDF & Scan Sheet Exporter -->
         <div class="surface-card">
           <div class="card-header">
             <div>
               <h2>Photo-to-PDF &amp; Scan Sheet</h2>
-              <p class="subtext">Combine multiple photos into a clean, size-optimized multi-page PDF.</p>
+              <p class="subtext">Combine photos into a size-optimized PDF with perspective deskew &amp; scan contrast.</p>
             </div>
           </div>
 
@@ -283,43 +347,136 @@
             <p class="dropzone-caption" id="pdfFilesLabel">No files selected yet</p>
           </div>
 
-          <div class="field-group" style="margin-top:16px">
-            <label class="field-label">Page Size</label>
-            <div class="chip-row" id="pdfPageChips">
+          <div class="field-group" style="margin-top:14px">
+            <label class="field-label">Page Size &amp; Margins</label>
+            <div class="chip-row" id="pdfPageChips" style="margin-bottom:8px">
               <button type="button" class="choice-chip active" data-pdf-page="a4">A4</button>
               <button type="button" class="choice-chip" data-pdf-page="letter">US Letter</button>
               <button type="button" class="choice-chip" data-pdf-page="fit">Fit Photo</button>
             </div>
-          </div>
-
-          <div class="field-group">
-            <label class="field-label">Page Margin</label>
             <div class="chip-row" id="pdfMarginChips">
-              <button type="button" class="choice-chip" data-pdf-margin="none">None</button>
-              <button type="button" class="choice-chip active" data-pdf-margin="small">Small</button>
+              <button type="button" class="choice-chip" data-pdf-margin="none">No Margin</button>
+              <button type="button" class="choice-chip active" data-pdf-margin="small">Small Margin</button>
               <button type="button" class="choice-chip" data-pdf-margin="standard">Standard</button>
             </div>
           </div>
 
-          <label class="switch-row compact-switch" for="pdfScanFilterToggle">
-            <div>
-              <span class="switch-title">High-Contrast Document Scan Filter</span>
-              <span class="subtext">Crisp grayscale boost ideal for receipts, notes &amp; whiteboards</span>
-            </div>
-            <input type="checkbox" id="pdfScanFilterToggle" class="toggle-checkbox" />
-          </label>
+          <div class="toggles-stack">
+            <label class="switch-row compact-switch" for="pdfDeskewToggle">
+              <div>
+                <span class="switch-title">Auto-Crop &amp; 4-Corner Perspective Deskew</span>
+                <span class="subtext">Straightens angled receipts, cards &amp; pages</span>
+              </div>
+              <input type="checkbox" id="pdfDeskewToggle" class="toggle-checkbox" />
+            </label>
 
-          <button type="button" class="primary-btn full-btn" id="buildPdfBtn" style="margin-top:14px" disabled>
+            <label class="switch-row compact-switch" for="pdfScanFilterToggle">
+              <div>
+                <span class="switch-title">High-Contrast Document Scan Filter</span>
+                <span class="subtext">Crisp grayscale boost for text legibility</span>
+              </div>
+              <input type="checkbox" id="pdfScanFilterToggle" class="toggle-checkbox" />
+            </label>
+          </div>
+
+          <button type="button" class="primary-btn full-btn" id="buildPdfBtn" disabled>
             Select Photos to Build PDF
           </button>
         </div>
 
-        <!-- #4 Background Watched-Folder Auto-Converter -->
+        <!-- Card 2: Contact Sheet, Collage & 2-Up ID Card Builder (#3) -->
+        <div class="surface-card">
+          <div class="card-header">
+            <div>
+              <h2>Contact Sheet, Collage &amp; ID Card</h2>
+              <p class="subtext">Merge photos into a 2-Up Front/Back ID sheet, comparison pair, or proof grid.</p>
+            </div>
+          </div>
+
+          <div class="dropzone compact-dropzone" id="collageDropzone" tabindex="0" role="button">
+            <input type="file" id="collageFileInput" multiple accept="image/*,.heic,.heif,.avif,.dng" hidden />
+            <p class="dropzone-headline">Select photos for layout or <span>browse</span></p>
+            <p class="dropzone-caption" id="collageFilesLabel">No files selected yet</p>
+          </div>
+
+          <div class="field-group" style="margin-top:14px">
+            <label class="field-label">Grid Layout</label>
+            <div class="chip-row" id="collageLayoutChips">
+              <button type="button" class="choice-chip active" data-clayout="2x1">2&times;1 Side-by-Side</button>
+              <button type="button" class="choice-chip" data-clayout="id_card_2up">ID Card 2-Up (A4)</button>
+              <button type="button" class="choice-chip" data-clayout="2x2">2&times;2 Grid</button>
+              <button type="button" class="choice-chip" data-clayout="3x3">3&times;3 Sheet</button>
+            </div>
+          </div>
+
+          <div class="field-group">
+            <label class="field-label">Export Format</label>
+            <div class="chip-row" id="collageFormatChips">
+              <button type="button" class="choice-chip active" data-cfmt="jpeg">JPEG</button>
+              <button type="button" class="choice-chip" data-cfmt="webp">WebP</button>
+              <button type="button" class="choice-chip" data-cfmt="png">PNG</button>
+              <button type="button" class="choice-chip" data-cfmt="pdf">PDF Sheet</button>
+            </div>
+          </div>
+
+          <label class="switch-row compact-switch" for="collageCaptionsToggle">
+            <div>
+              <span class="switch-title">Show filename captions</span>
+              <span class="subtext">Prints clean filenames beneath each grid cell</span>
+            </div>
+            <input type="checkbox" id="collageCaptionsToggle" class="toggle-checkbox" />
+          </label>
+
+          <button type="button" class="primary-btn full-btn" id="buildCollageBtn" style="margin-top:14px" disabled>
+            Select Photos for Collage
+          </button>
+        </div>
+
+        <!-- Card 3: Burst-to-Animated WebP / GIF Maker (#5) -->
+        <div class="surface-card">
+          <div class="card-header">
+            <div>
+              <h2>Burst-to-Animated WebP / GIF</h2>
+              <p class="subtext">Turn 2+ burst or sequence photos into a smooth looping animation.</p>
+            </div>
+          </div>
+
+          <div class="dropzone compact-dropzone" id="animDropzone" tabindex="0" role="button">
+            <input type="file" id="animFileInput" multiple accept="image/*,.heic,.heif,.avif" hidden />
+            <p class="dropzone-headline">Select 2+ sequence frames or <span>browse</span></p>
+            <p class="dropzone-caption" id="animFilesLabel">No frames selected yet</p>
+          </div>
+
+          <div class="field-group" style="margin-top:14px">
+            <div class="field-row">
+              <div class="chip-row" id="animFormatChips">
+                <button type="button" class="choice-chip active" data-afmt="webp">Animated WebP</button>
+                <button type="button" class="choice-chip" data-afmt="gif">Animated GIF</button>
+              </div>
+              <span class="value-badge" id="animDelayBadge">240 ms</span>
+            </div>
+            <input type="range" id="animDelaySlider" min="60" max="1000" step="20" value="240" class="range-slider" />
+          </div>
+
+          <label class="switch-row compact-switch" for="animBoomerangToggle">
+            <div>
+              <span class="switch-title">Boomerang ping-pong loop</span>
+              <span class="subtext">Plays forward then smoothly reverses back</span>
+            </div>
+            <input type="checkbox" id="animBoomerangToggle" class="toggle-checkbox" />
+          </label>
+
+          <button type="button" class="primary-btn full-btn" id="buildAnimBtn" style="margin-top:14px" disabled>
+            Select 2+ Frames to Animate
+          </button>
+        </div>
+
+        <!-- Card 4: Background Watched-Folder Auto-Converter -->
         <div class="surface-card">
           <div class="card-header">
             <div>
               <h2>Watched-Folder Auto-Converter</h2>
-              <p class="subtext">Monitors an inbox folder in the background and converts dropped images automatically.</p>
+              <p class="subtext">Monitors an inbox directory and auto-converts newly added photos.</p>
             </div>
             <span class="saved-pill" id="watcherStatusBadge">Idle</span>
           </div>
@@ -338,7 +495,7 @@
           <label class="switch-row compact-switch" for="watcherEnableToggle" style="margin-top:14px">
             <div>
               <span class="switch-title">Enable Background Auto-Watch</span>
-              <span class="subtext">Uses your current Output Settings &amp; Studio Enhancements</span>
+              <span class="subtext">Uses your active Output Settings &amp; Studio Enhancements</span>
             </div>
             <input type="checkbox" id="watcherEnableToggle" class="toggle-checkbox" />
           </label>
@@ -346,6 +503,36 @@
           <div class="watcher-actions">
             <button type="button" class="secondary-btn" id="watcherDropSampleBtn">Drop Sample Photo in Inbox</button>
             <button type="button" class="primary-btn" id="watcherScanNowBtn">Scan Folder Now</button>
+          </div>
+        </div>
+
+        <!-- Card 5 (Full Width): Responsive <picture> Web Pack + LQIP & Palette Generator (#10) -->
+        <div class="surface-card full-span-card">
+          <div class="card-header">
+            <div>
+              <h2>Responsive &lt;picture&gt; Web Pack, LQIP &amp; Palette Generator</h2>
+              <p class="subtext">Export 480w / 960w / 1920w AVIF + WebP + JPEG breakpoints, blur-up LQIP, 5 dominant hex swatches &amp; HTML snippet.</p>
+            </div>
+            <div class="header-actions">
+              <input type="file" id="webpackFileInput" accept="image/*,.heic,.heif,.avif,.dng" hidden />
+              <button type="button" class="secondary-btn" id="webpackSampleBtn">Preview Sample Pack</button>
+              <button type="button" class="secondary-btn" id="webpackPickBtn">Choose Photo</button>
+              <button type="button" class="primary-btn" id="webpackDownloadBtn">Download Web Pack (.zip)</button>
+            </div>
+          </div>
+
+          <div id="webpackPreviewArea" class="webpack-preview" hidden>
+            <div class="webpack-left">
+              <img id="webpackLqipPreview" class="lqip-preview" alt="LQIP blur preview" />
+              <div class="palette-row" id="webpackSwatches"></div>
+            </div>
+            <div class="webpack-right">
+              <div class="field-row">
+                <span class="field-label" style="margin:0">Generated &lt;picture&gt; HTML Snippet</span>
+                <button type="button" class="ghost-btn compact-btn" id="copySnippetBtn">Copy HTML</button>
+              </div>
+              <pre class="code-box" id="webpackSnippetCode"></pre>
+            </div>
           </div>
         </div>
       </div>
@@ -363,7 +550,7 @@
 
       <form class="surface-card preset-form" id="newPresetForm" hidden>
         <div class="preset-form-grid">
-          <input type="text" id="presetNameInput" class="text-input" placeholder="Preset name (e.g., Watermarked Social 4:5)" required />
+          <input type="text" id="presetNameInput" class="text-input" placeholder="Preset name (e.g., Safe Social No GPS)" required />
           <input type="text" id="presetDescInput" class="text-input" placeholder="Short description (optional)" />
           <button type="submit" class="primary-btn">Save Preset</button>
         </div>
@@ -403,15 +590,17 @@
     </section>
   </main>
 
-  <!-- #1 Interactive Split-Screen Before/After Loupe Modal -->
+  <!-- Interactive Split-Screen Before/After Loupe + Custom Redaction Box Modal -->
   <div class="modal-backdrop" id="loupeModal" hidden>
     <div class="modal-sheet" role="dialog" aria-modal="true" aria-labelledby="loupeTitle">
       <div class="modal-header">
         <div>
           <h2 id="loupeTitle">Before / After Split Loupe</h2>
-          <p class="subtext" id="loupeSubtitle">Drag the divider or zoom in to inspect compression &amp; enhancements.</p>
+          <p class="subtext" id="loupeSubtitle">Drag the divider to compare, or draw privacy redaction boxes.</p>
         </div>
         <div class="header-actions">
+          <button type="button" class="secondary-btn compact-btn" id="toggleDrawRedactBtn">+ Draw Redact Box</button>
+          <button type="button" class="ghost-btn compact-btn" id="clearRedactBoxesBtn" hidden>Clear Boxes</button>
           <div class="mini-seg" id="loupeZoomChips">
             <button type="button" class="mini-seg-btn active" data-zoom="1">1&times;</button>
             <button type="button" class="mini-seg-btn" data-zoom="2">2&times;</button>
@@ -429,6 +618,7 @@
             <img id="loupeBeforeImg" class="loupe-img" alt="Original preview" />
           </div>
         </div>
+        <div class="redact-draw-box" id="loupeDraftBox" hidden></div>
         <div class="loupe-divider" id="loupeDivider" style="left: 50%">
           <div class="loupe-knob">&harr;</div>
         </div>
@@ -440,6 +630,20 @@
         <input type="range" id="loupeSplitSlider" min="0" max="100" value="50" class="range-slider" aria-label="Split comparison position" />
         <div class="loupe-metrics" id="loupeMetricsText">Calculating live preview...</div>
       </div>
+    </div>
+  </div>
+
+  <!-- EXIF, GPS & Dominant Color Palette Inspector Modal (#2 & #10) -->
+  <div class="modal-backdrop" id="exifModal" hidden>
+    <div class="modal-sheet narrow-sheet" role="dialog" aria-modal="true" aria-labelledby="exifModalTitle">
+      <div class="modal-header">
+        <div>
+          <h2 id="exifModalTitle">EXIF, GPS &amp; Color Inspector</h2>
+          <p class="subtext" id="exifModalSubtitle"></p>
+        </div>
+        <button type="button" class="ghost-btn" id="closeExifModalBtn">Close</button>
+      </div>
+      <div id="exifModalBody" class="inspector-body"></div>
     </div>
   </div>
 

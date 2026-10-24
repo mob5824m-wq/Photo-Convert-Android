@@ -155,3 +155,114 @@ def test_full_api_workflow(tmp_path: Path) -> None:
     cleared = client.delete("/api/history")
     assert cleared.status_code == 200
     assert cleared.json()["summary"]["total_converted"] == 0
+
+
+def test_batch2_studio_endpoints(tmp_path: Path) -> None:
+    """Tests EXIF inspector, Burst De-duplicator, Collage/2-Up ID, Animated WebP/GIF & Web Pack."""
+    app = create_app(data_dir=tmp_path / "data2")
+    client = TestClient(app)
+
+    sharp_img = Image.new("RGB", (800, 600), (240, 245, 250))
+    from PIL import ImageDraw, ImageFilter
+
+    d = ImageDraw.Draw(sharp_img)
+    for x in range(40, 760, 40):
+        d.line((x, 40, x, 560), fill=(15, 23, 42), width=4)
+    sharp_buf = io.BytesIO()
+    sharp_img.save(sharp_buf, format="JPEG", quality=92)
+    sharp_bytes = sharp_buf.getvalue()
+
+    blurry_buf = io.BytesIO()
+    sharp_img.filter(ImageFilter.GaussianBlur(radius=6)).save(blurry_buf, format="JPEG", quality=85)
+    blurry_bytes = blurry_buf.getvalue()
+
+    # 1. EXIF & Palette Inspector
+    insp = client.post(
+        "/api/inspect-exif",
+        files={"file": ("hero.jpg", sharp_bytes, "image/jpeg")},
+    )
+    assert insp.status_code == 200
+    ibody = insp.json()
+    assert ibody["width"] == 800
+    assert len(ibody["palette"]) >= 1
+    assert len(ibody["dhash"]) == 16
+
+    # 2. Perceptual Burst De-duplicator keeps sharpest frame
+    dedupe = client.post(
+        "/api/dedupe",
+        files=[
+            ("files", ("burst_blur.jpg", blurry_bytes, "image/jpeg")),
+            ("files", ("burst_sharp.jpg", sharp_bytes, "image/jpeg")),
+        ],
+    )
+    assert dedupe.status_code == 200
+    dbody = dedupe.json()
+    assert dbody["keep_indices"] == [1]
+    assert dbody["drop_indices"] == [0]
+
+    # 3. 2-Up ID Card PDF & 2x2 Collage JPEG
+    id_res = client.post(
+        "/api/export-collage",
+        files=[
+            ("files", ("front.jpg", sharp_bytes, "image/jpeg")),
+            ("files", ("back.jpg", blurry_bytes, "image/jpeg")),
+        ],
+        data={"layout": "id_card_2up", "output_format": "pdf", "show_captions": "true"},
+    )
+    assert id_res.status_code == 200
+    assert id_res.content.startswith(b"%PDF")
+
+    grid_res = client.post(
+        "/api/export-collage",
+        files=[
+            ("files", ("a.jpg", sharp_bytes, "image/jpeg")),
+            ("files", ("b.jpg", blurry_bytes, "image/jpeg")),
+        ],
+        data={"layout": "2x1", "output_format": "webp", "show_captions": "true"},
+    )
+    assert grid_res.status_code == 200
+    assert grid_res.headers["content-type"] == "image/webp"
+
+    # 4. Burst-to-Animated WebP & GIF
+    anim_webp = client.post(
+        "/api/export-animation",
+        files=[
+            ("files", ("f1.jpg", sharp_bytes, "image/jpeg")),
+            ("files", ("f2.jpg", blurry_bytes, "image/jpeg")),
+        ],
+        data={"output_format": "webp", "frame_duration_ms": "200", "boomerang": "true"},
+    )
+    assert anim_webp.status_code == 200
+    assert anim_webp.headers["content-type"] == "image/webp"
+
+    anim_gif = client.post(
+        "/api/export-animation",
+        files=[
+            ("files", ("f1.jpg", sharp_bytes, "image/jpeg")),
+            ("files", ("f2.jpg", blurry_bytes, "image/jpeg")),
+        ],
+        data={"output_format": "gif", "frame_duration_ms": "200"},
+    )
+    assert anim_gif.status_code == 200
+    assert anim_gif.content.startswith(b"GIF8")
+
+    # 5. Responsive <picture> Web Pack preview + ZIP download
+    wp_prev = client.post(
+        "/api/export-webpack/preview",
+        files={"file": ("hero_banner.jpg", sharp_bytes, "image/jpeg")},
+        data={"quality": "82"},
+    )
+    assert wp_prev.status_code == 200
+    assert "<picture>" in wp_prev.json()["html_snippet"]
+
+    wp_zip = client.post(
+        "/api/export-webpack",
+        files={"file": ("hero_banner.jpg", sharp_bytes, "image/jpeg")},
+        data={"quality": "82"},
+    )
+    assert wp_zip.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(wp_zip.content)) as zf:
+        names = set(zf.namelist())
+        assert "snippet.html" in names
+        assert "palette.json" in names
+

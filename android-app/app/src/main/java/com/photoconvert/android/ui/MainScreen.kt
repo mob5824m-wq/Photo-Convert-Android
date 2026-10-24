@@ -1,6 +1,10 @@
 package com.photoconvert.android.ui
 
+import android.app.Activity
+import android.os.Build
+import android.provider.MediaStore
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -36,21 +40,29 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.photoconvert.android.model.ByteFormatter
+import com.photoconvert.android.model.ExifPrivacyMode
 import com.photoconvert.android.ui.components.BeforeAfterLoupeDialog
+import com.photoconvert.android.ui.components.ExifInspectorDialog
+import com.photoconvert.android.ui.components.shareFile
 import com.photoconvert.android.ui.screens.ConvertScreen
 import com.photoconvert.android.ui.screens.HistoryScreen
 import com.photoconvert.android.ui.screens.PresetsScreen
 import com.photoconvert.android.ui.screens.ToolsScreen
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen(viewModel: ConvertViewModel) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val state by viewModel.uiState.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
     val systemDark = isSystemInDarkTheme()
@@ -62,6 +74,12 @@ fun MainScreen(viewModel: ConvertViewModel) {
         viewModel.enqueueUris(uris)
     }
 
+    val trashLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartIntentSenderForResult()
+    ) { result ->
+        viewModel.clearLastBatchSourceUris(trashed = result.resultCode == Activity.RESULT_OK)
+    }
+
     LaunchedEffect(state.statusMessage) {
         val msg = state.statusMessage ?: return@LaunchedEffect
         snackbarHostState.showSnackbar(msg)
@@ -71,7 +89,20 @@ fun MainScreen(viewModel: ConvertViewModel) {
     state.loupePreview?.let { preview ->
         BeforeAfterLoupeDialog(
             preview = preview,
+            hasCustomRedactions = state.settings.redactBoxesSpec.isNotBlank(),
+            onAddRedactBox = viewModel::addCustomLoupeRedactBox,
+            onClearRedactBoxes = viewModel::clearCustomLoupeRedactBoxes,
             onDismiss = viewModel::closeLoupePreview
+        )
+    }
+
+    state.exifReport?.let { report ->
+        ExifInspectorDialog(
+            report = report,
+            onApplyScrubGpsOnly = {
+                viewModel.updateSettings { it.copy(exifPrivacyMode = ExifPrivacyMode.SCRUB_GPS_ONLY) }
+            },
+            onDismiss = viewModel::closeExifInspector
         )
     }
 
@@ -124,7 +155,7 @@ fun MainScreen(viewModel: ConvertViewModel) {
                     selected = state.selectedTab == 1,
                     onClick = { viewModel.selectTab(1) },
                     icon = { Icon(Icons.Outlined.PictureAsPdf, contentDescription = null) },
-                    label = { Text("PDF & Watch") }
+                    label = { Text("Tools") }
                 )
                 NavigationBarItem(
                     selected = state.selectedTab == 2,
@@ -155,8 +186,10 @@ fun MainScreen(viewModel: ConvertViewModel) {
             when (state.selectedTab) {
                 0 -> ConvertScreen(
                     queuedUris = state.queuedUris,
+                    canTrashOriginals = state.lastBatchSourceUris.isNotEmpty(),
                     settings = state.settings,
                     isConverting = state.isConverting,
+                    isDeduplicating = state.isDeduplicating,
                     loupeLoading = state.loupeLoading,
                     progressDone = state.progressDone,
                     progressTotal = state.progressTotal,
@@ -166,18 +199,56 @@ fun MainScreen(viewModel: ConvertViewModel) {
                             PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
                         )
                     },
+                    onDedupeBursts = viewModel::dedupeQueuedBursts,
+                    onInspectExif = viewModel::inspectUriExif,
                     onInspectLoupe = viewModel::openLoupePreview,
                     onRemoveQueued = viewModel::removeQueuedUri,
                     onClearQueue = viewModel::clearQueue,
+                    onSelectLogoUri = viewModel::selectWatermarkLogo,
                     onUpdateSettings = viewModel::updateSettings,
-                    onRunConvert = viewModel::convertQueuedPhotos
+                    onRunConvert = viewModel::convertQueuedPhotos,
+                    onShareBatchZip = {
+                        viewModel.exportItemsAsZip(state.latestBatch) { zip ->
+                            shareFile(context, zip, "application/zip", zip.name)
+                        }
+                    },
+                    onTrashOriginals = {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && state.lastBatchSourceUris.isNotEmpty()) {
+                            runCatching {
+                                val pending = MediaStore.createTrashRequest(
+                                    context.contentResolver,
+                                    state.lastBatchSourceUris,
+                                    true
+                                )
+                                trashLauncher.launch(
+                                    IntentSenderRequest.Builder(pending.intentSender).build()
+                                )
+                            }.onFailure {
+                                viewModel.clearLastBatchSourceUris(trashed = false)
+                                scope.launch {
+                                    snackbarHostState.showSnackbar(
+                                        "Originals came from read-only Photo Picker; share from Gallery to trash MediaStore originals."
+                                    )
+                                }
+                            }
+                        }
+                    }
                 )
 
                 1 -> ToolsScreen(
                     isBuildingPdf = state.isBuildingPdf,
                     latestPdfFile = state.latestPdfFile,
+                    isBuildingCollage = state.isBuildingCollage,
+                    latestCollageFile = state.latestCollageFile,
+                    isBuildingAnimation = state.isBuildingAnimation,
+                    latestAnimationFile = state.latestAnimationFile,
+                    isBuildingWebPack = state.isBuildingWebPack,
+                    latestWebPack = state.latestWebPack,
                     watchedFolder = state.watchedFolder,
                     onBuildPdf = viewModel::buildPdfDocument,
+                    onBuildCollage = viewModel::buildCollageSheet,
+                    onBuildAnimation = viewModel::buildBurstAnimation,
+                    onBuildWebPack = viewModel::buildResponsiveWebPack,
                     onSelectWatchedFolder = viewModel::selectWatchedFolderUri,
                     onToggleWatchedFolder = viewModel::toggleWatchedFolder,
                     onScanWatchedNow = viewModel::scanWatchedFolderNow
@@ -193,6 +264,11 @@ fun MainScreen(viewModel: ConvertViewModel) {
                 else -> HistoryScreen(
                     history = state.history,
                     summary = state.summary,
+                    onExportFilteredZip = { items ->
+                        viewModel.exportItemsAsZip(items) { zip ->
+                            shareFile(context, zip, "application/zip", zip.name)
+                        }
+                    },
                     onDeleteItem = viewModel::deleteHistoryItem,
                     onClearAll = viewModel::clearHistory
                 )

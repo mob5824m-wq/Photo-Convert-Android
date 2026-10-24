@@ -248,3 +248,67 @@ def test_rollover_versioning() -> None:
     assert bump_version((1, 9, 9)) == (2, 0, 0)
     assert parse_tag("v1.2.9") == (1, 2, 9)
     assert parse_tag("invalid") is None
+
+
+def test_selective_gps_scrubber_and_exif_copyright(tmp_path: Path) -> None:
+    """Batch 2 #2: Scrub GPS coordinates while keeping camera/date + custom Artist/Copyright."""
+    src = _make_exif_jpeg(1200, 900, orientation=1)
+    scrubbed = convert_image_bytes(
+        src,
+        "gps_shot.jpg",
+        ConvertOptions(
+            output_format="jpeg",
+            quality=86,
+            exif_privacy_mode="gps_only",
+            exif_artist="Studio North",
+            exif_copyright="© 2026 Studio North",
+        ),
+        tmp_path,
+    )
+    assert scrubbed.exif_kept is True
+    assert scrubbed.exif_privacy_mode == "gps_only"
+    with Image.open(scrubbed.output_path) as out_img:
+        loaded = piexif.load(out_img.info["exif"])
+        assert loaded["GPS"] == {}
+        assert loaded["0th"][piexif.ImageIFD.Model] == b"Pixel 9"
+        assert loaded["0th"][piexif.ImageIFD.Artist] == b"Studio North"
+        assert b"2026 Studio North" in loaded["0th"][piexif.ImageIFD.Copyright]
+
+
+def test_privacy_redaction_deskew_tone_and_tiled_logo_watermark(tmp_path: Path) -> None:
+    """Batch 2 #1, #4, #6, #7: Custom redaction boxes, auto-deskew, tone/sharpen & tiled logo."""
+    doc = Image.new("RGB", (900, 700), (24, 28, 36))
+    draw = ImageDraw.Draw(doc)
+    draw.polygon([(140, 110), (770, 90), (790, 590), (120, 610)], fill=(246, 248, 252))
+    draw.rectangle((260, 240, 520, 320), fill=(220, 38, 38))
+    buf = io.BytesIO()
+    doc.save(buf, format="JPEG", quality=92)
+
+    logo = Image.new("RGBA", (120, 48), (0, 0, 0, 0))
+    ImageDraw.Draw(logo).rectangle((8, 8, 112, 40), fill=(37, 99, 235, 210))
+    logo_buf = io.BytesIO()
+    logo.save(logo_buf, format="PNG")
+
+    converted = convert_image_bytes(
+        buf.getvalue(),
+        "skewed_scan.jpg",
+        ConvertOptions(
+            output_format="webp",
+            quality=85,
+            auto_deskew=True,
+            post_sharpen=True,
+            auto_levels=True,
+            grayscale=True,
+            redact_boxes="0.20,0.20,0.35,0.25",
+            redact_style="solid",
+            watermark_text="CONFIDENTIAL",
+            watermark_tiled=True,
+            watermark_logo_bytes=logo_buf.getvalue(),
+        ),
+        tmp_path,
+    )
+    assert converted.redacted_regions >= 1
+    assert converted.out_bytes > 0
+    # Rectified document should be trimmed smaller than full 900x700 dark canvas
+    assert converted.out_width < 880 or converted.out_height < 680
+

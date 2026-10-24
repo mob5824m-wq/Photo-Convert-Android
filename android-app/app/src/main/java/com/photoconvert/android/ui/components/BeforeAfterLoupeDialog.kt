@@ -1,11 +1,15 @@
 package com.photoconvert.android.ui.components
 
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
@@ -26,14 +30,18 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
@@ -47,15 +55,27 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.photoconvert.android.engine.LoupePreviewResult
 import com.photoconvert.android.model.ByteFormatter
+import java.util.Locale
+import kotlin.math.abs
+import kotlin.math.max
+import kotlin.math.min
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun BeforeAfterLoupeDialog(
     preview: LoupePreviewResult,
+    hasCustomRedactions: Boolean,
+    onAddRedactBox: (String) -> Unit,
+    onClearRedactBoxes: () -> Unit,
     onDismiss: () -> Unit
 ) {
     var splitFraction by remember { mutableFloatStateOf(0.5f) }
     var zoomLevel by remember { mutableIntStateOf(1) }
+    var drawRedactMode by remember { mutableStateOf(false) }
     var stageWidthPx by remember { mutableFloatStateOf(1f) }
+    var stageHeightPx by remember { mutableFloatStateOf(1f) }
+    var dragStart by remember { mutableStateOf<Offset?>(null) }
+    var dragCurrent by remember { mutableStateOf<Offset?>(null) }
     val density = LocalDensity.current
 
     Dialog(
@@ -95,12 +115,33 @@ fun BeforeAfterLoupeDialog(
                     }
                 }
 
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
                     listOf(1, 2, 3, 4).forEach { z ->
                         ChoicePill(
                             label = "${z}×",
-                            selected = zoomLevel == z,
-                            onClick = { zoomLevel = z }
+                            selected = zoomLevel == z && !drawRedactMode,
+                            onClick = {
+                                drawRedactMode = false
+                                zoomLevel = z
+                            }
+                        )
+                    }
+                    ChoicePill(
+                        label = if (drawRedactMode) "Drawing Redaction" else "+ Redact Box",
+                        selected = drawRedactMode,
+                        onClick = {
+                            drawRedactMode = !drawRedactMode
+                            if (drawRedactMode) zoomLevel = 1
+                        }
+                    )
+                    if (hasCustomRedactions) {
+                        ChoicePill(
+                            label = "Clear Boxes",
+                            selected = false,
+                            onClick = onClearRedactBoxes
                         )
                     }
                 }
@@ -111,11 +152,61 @@ fun BeforeAfterLoupeDialog(
                         .height(320.dp)
                         .clip(RoundedCornerShape(14.dp))
                         .background(MaterialTheme.colorScheme.surfaceVariant)
-                        .onSizeChanged { stageWidthPx = it.width.toFloat().coerceAtLeast(1f) }
-                        .pointerInput(Unit) {
-                            detectHorizontalDragGestures { change, _ ->
-                                change.consume()
-                                splitFraction = (change.position.x / stageWidthPx).coerceIn(0f, 1f)
+                        .onSizeChanged {
+                            stageWidthPx = it.width.toFloat().coerceAtLeast(1f)
+                            stageHeightPx = it.height.toFloat().coerceAtLeast(1f)
+                        }
+                        .pointerInput(drawRedactMode, stageWidthPx, stageHeightPx) {
+                            if (drawRedactMode) {
+                                detectDragGestures(
+                                    onDragStart = { pos ->
+                                        dragStart = pos
+                                        dragCurrent = pos
+                                    },
+                                    onDrag = { change, _ ->
+                                        change.consume()
+                                        dragCurrent = change.position
+                                    },
+                                    onDragEnd = {
+                                        val s = dragStart
+                                        val c = dragCurrent
+                                        dragStart = null
+                                        dragCurrent = null
+                                        if (s != null && c != null) {
+                                            val bmpW = preview.beforeBitmap.width.toFloat().coerceAtLeast(1f)
+                                            val bmpH = preview.beforeBitmap.height.toFloat().coerceAtLeast(1f)
+                                            val fitScale = min(stageWidthPx / bmpW, stageHeightPx / bmpH)
+                                            val drawnW = bmpW * fitScale
+                                            val drawnH = bmpH * fitScale
+                                            val leftPad = (stageWidthPx - drawnW) / 2f
+                                            val topPad = (stageHeightPx - drawnH) / 2f
+
+                                            val nx0 = ((min(s.x, c.x) - leftPad) / drawnW).coerceIn(0f, 1f)
+                                            val ny0 = ((min(s.y, c.y) - topPad) / drawnH).coerceIn(0f, 1f)
+                                            val nx1 = ((max(s.x, c.x) - leftPad) / drawnW).coerceIn(0f, 1f)
+                                            val ny1 = ((max(s.y, c.y) - topPad) / drawnH).coerceIn(0f, 1f)
+                                            val nw = nx1 - nx0
+                                            val nh = ny1 - ny0
+                                            if (nw >= 0.02f && nh >= 0.02f) {
+                                                val spec = String.format(
+                                                    Locale.US,
+                                                    "%.4f,%.4f,%.4f,%.4f",
+                                                    nx0, ny0, nw, nh
+                                                )
+                                                onAddRedactBox(spec)
+                                            }
+                                        }
+                                    },
+                                    onDragCancel = {
+                                        dragStart = null
+                                        dragCurrent = null
+                                    }
+                                )
+                            } else {
+                                detectHorizontalDragGestures { change, _ ->
+                                    change.consume()
+                                    splitFraction = (change.position.x / stageWidthPx).coerceIn(0f, 1f)
+                                }
                             }
                         }
                 ) {
@@ -147,6 +238,28 @@ fun BeforeAfterLoupeDialog(
                         )
                     }
 
+                    val s = dragStart
+                    val c = dragCurrent
+                    if (s != null && c != null) {
+                        Canvas(modifier = Modifier.fillMaxSize()) {
+                            val left = min(s.x, c.x)
+                            val top = min(s.y, c.y)
+                            val w = abs(c.x - s.x)
+                            val h = abs(c.y - s.y)
+                            drawRect(
+                                color = Color(0x44EF4444),
+                                topLeft = Offset(left, top),
+                                size = Size(w, h)
+                            )
+                            drawRect(
+                                color = Color(0xFFEF4444),
+                                topLeft = Offset(left, top),
+                                size = Size(w, h),
+                                style = Stroke(width = 3f)
+                            )
+                        }
+                    }
+
                     val dividerOffsetDp = with(density) { (stageWidthPx * splitFraction).toDp() }
                     Box(
                         modifier = Modifier
@@ -164,7 +277,7 @@ fun BeforeAfterLoupeDialog(
                         color = Color(0xBB0F172A)
                     ) {
                         Text(
-                            text = "Original",
+                            text = if (drawRedactMode) "Drag over area to redact" else "Original",
                             color = Color.White,
                             style = MaterialTheme.typography.labelSmall,
                             modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
@@ -178,8 +291,9 @@ fun BeforeAfterLoupeDialog(
                         shape = RoundedCornerShape(999.dp),
                         color = Color(0xBB0F172A)
                     ) {
+                        val redactTag = if (preview.redactedRegions > 0) " · ${preview.redactedRegions} redacted" else ""
                         Text(
-                            text = "${preview.outputFormatLabel} (${preview.usedQuality}%)",
+                            text = "${preview.outputFormatLabel} (${preview.usedQuality}%)$redactTag",
                             color = Color.White,
                             style = MaterialTheme.typography.labelSmall,
                             modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)

@@ -1,6 +1,9 @@
 package com.photoconvert.android
 
 import android.content.Intent
+import android.content.pm.ShortcutInfo
+import android.content.pm.ShortcutManager
+import android.graphics.drawable.Icon
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -21,8 +24,10 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        registerDynamicLauncherShortcuts()
+
         if (savedInstanceState == null) {
-            handleIncomingShareIntent(intent)
+            handleIncomingIntent(intent)
         }
 
         setContent {
@@ -35,11 +40,14 @@ class MainActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        handleIncomingShareIntent(intent)
+        handleIncomingIntent(intent)
     }
 
-    private fun handleIncomingShareIntent(intent: Intent?) {
+    private fun handleIncomingIntent(intent: Intent?) {
         if (intent == null) return
+        intent.getStringExtra(EXTRA_SHORTCUT_ACTION)?.let { actionCode ->
+            viewModel.handleShortcutAction(actionCode)
+        }
         when (intent.action) {
             Intent.ACTION_SEND -> {
                 extractSingleUri(intent)?.let { viewModel.enqueueUris(listOf(it)) }
@@ -49,6 +57,46 @@ class MainActivity : ComponentActivity() {
                 if (uris.isNotEmpty()) viewModel.enqueueUris(uris)
             }
         }
+    }
+
+    private fun registerDynamicLauncherShortcuts() {
+        val sm = getSystemService(ShortcutManager::class.java) ?: return
+        val shortcuts = listOf(
+            ShortcutInfo.Builder(this, "shortcut_quick_webp")
+                .setShortLabel("Quick WebP")
+                .setLongLabel("Quick WebP 82%")
+                .setIcon(Icon.createWithResource(this, R.mipmap.ic_launcher))
+                .setIntent(
+                    Intent(this, MainActivity::class.java).apply {
+                        action = Intent.ACTION_VIEW
+                        putExtra(EXTRA_SHORTCUT_ACTION, "preset:web-webp")
+                    }
+                )
+                .build(),
+            ShortcutInfo.Builder(this, "shortcut_fit_500kb")
+                .setShortLabel("Fit <= 500 KB")
+                .setLongLabel("Exact Fit <= 500 KB")
+                .setIcon(Icon.createWithResource(this, R.mipmap.ic_launcher))
+                .setIntent(
+                    Intent(this, MainActivity::class.java).apply {
+                        action = Intent.ACTION_VIEW
+                        putExtra(EXTRA_SHORTCUT_ACTION, "preset:portal-under-500kb")
+                    }
+                )
+                .build(),
+            ShortcutInfo.Builder(this, "shortcut_tools_pdf")
+                .setShortLabel("PDF & Tools")
+                .setLongLabel("Photo to PDF & Studio Tools")
+                .setIcon(Icon.createWithResource(this, R.mipmap.ic_launcher))
+                .setIntent(
+                    Intent(this, MainActivity::class.java).apply {
+                        action = Intent.ACTION_VIEW
+                        putExtra(EXTRA_SHORTCUT_ACTION, "tab:tools")
+                    }
+                )
+                .build()
+        )
+        runCatching { sm.dynamicShortcuts = shortcuts }
     }
 
     @Suppress("DEPRECATION")
@@ -67,5 +115,9 @@ class MainActivity : ComponentActivity() {
         } else {
             intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM) ?: emptyList()
         }
+    }
+
+    private companion object {
+        const val EXTRA_SHORTCUT_ACTION = "shortcut_action"
     }
 }

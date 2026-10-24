@@ -1,14 +1,19 @@
 package com.photoconvert.android
 
 import com.photoconvert.android.engine.BatchRenamer
+import com.photoconvert.android.engine.BurstDeduplicator
 import com.photoconvert.android.engine.DimensionCalculator
+import com.photoconvert.android.engine.PrivacyRedactor
 import com.photoconvert.android.model.AspectRatioOption
 import com.photoconvert.android.model.ByteFormatter
+import com.photoconvert.android.model.CollageLayout
 import com.photoconvert.android.model.ConvertSettings
 import com.photoconvert.android.model.DefaultPresets
+import com.photoconvert.android.model.ExifPrivacyMode
 import com.photoconvert.android.model.OutputFormat
 import com.photoconvert.android.model.ResizePreset
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -87,19 +92,36 @@ class DimensionCalculatorTest {
         val cfg = ConvertSettings(
             format = OutputFormat.JPEG,
             removeBackground = true,
+            autoDeskew = true,
+            postSharpen = true,
+            redactFaces = true,
             aspectRatio = AspectRatioOption.PORTRAIT_4_5,
             watermarkText = "© Studio"
         )
         assertEquals(OutputFormat.WEBP, cfg.effectiveFormat())
-        assertEquals(3, cfg.activeEnhancementCount())
+        assertEquals(6, cfg.activeEnhancementCount())
     }
 
     @Test
-    fun defaultPresetsCoverAllNewCapabilities() {
-        assertEquals(7, DefaultPresets.list.size)
+    fun privacyRedactorAndBurstDhashHelpersWork() {
+        assertTrue(PrivacyRedactor.looksSensitive("alice@example.com"))
+        assertTrue(PrivacyRedactor.looksSensitive("Card 4532 8891 2201 9910"))
+        assertTrue(PrivacyRedactor.looksSensitive("ABC-1234"))
+        assertFalse(PrivacyRedactor.looksSensitive("Hello"))
+
+        assertEquals(0, BurstDeduplicator.hammingDistance(0x123456789ABCDEF0L, 0x123456789ABCDEF0L))
+        assertEquals(4, BurstDeduplicator.hammingDistance(0xFL, 0x0L))
+    }
+
+    @Test
+    fun defaultPresetsCoverAllCapabilities() {
+        assertEquals(9, DefaultPresets.list.size)
         assertTrue(DefaultPresets.list.any { it.targetSizeKb == 500 })
         assertTrue(DefaultPresets.list.any { it.removeBackground })
-        assertTrue(DefaultPresets.list.any { it.aspectRatio == AspectRatioOption.PORTRAIT_4_5 })
+        assertTrue(DefaultPresets.list.any { it.autoDeskew })
+        assertTrue(DefaultPresets.list.any { it.watermarkTiled })
+        assertTrue(DefaultPresets.list.any { it.exifPrivacyMode == ExifPrivacyMode.SCRUB_GPS_ONLY })
+        assertEquals(CollageLayout.ID_CARD_2UP, CollageLayout.fromId("id_card_2up"))
         assertEquals("1.5 MB", ByteFormatter.format(1_572_864L))
     }
 }

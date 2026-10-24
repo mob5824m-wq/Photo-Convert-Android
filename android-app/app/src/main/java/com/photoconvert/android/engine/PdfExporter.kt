@@ -2,7 +2,6 @@ package com.photoconvert.android.engine
 
 import android.content.ContentValues
 import android.content.Context
-import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.ColorMatrix
@@ -30,7 +29,8 @@ class PdfExporter(private val context: Context) {
         uris: List<Uri>,
         pageSize: PdfPageSize = PdfPageSize.A4,
         margin: PdfMargin = PdfMargin.SMALL,
-        documentScanFilter: Boolean = false
+        documentScanFilter: Boolean = false,
+        autoDeskew: Boolean = false
     ): File = withContext(Dispatchers.IO) {
         require(uris.isNotEmpty()) { "Select at least one image to create a PDF." }
 
@@ -54,7 +54,13 @@ class PdfExporter(private val context: Context) {
                 }
                 val decoded = BitmapFactory.decodeByteArray(raw, 0, raw.size, decodeOpts)
                     ?: return@forEachIndexed
-                val upright = ExifHelper.applyOrientation(decoded, orientation)
+                var upright = ExifHelper.applyOrientation(decoded, orientation)
+
+                if (autoDeskew) {
+                    val deskewed = DocumentDeskewer.autoDeskewAndTrim(upright)
+                    if (deskewed !== upright) upright.recycle()
+                    upright = deskewed
+                }
 
                 val pad = margin.paddingPt
                 val pageW: Int

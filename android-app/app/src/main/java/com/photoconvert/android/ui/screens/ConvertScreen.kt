@@ -1,6 +1,10 @@
 package com.photoconvert.android.ui.screens
 
 import android.net.Uri
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -26,11 +30,13 @@ import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Compare
 import androidx.compose.material.icons.outlined.ExpandLess
 import androidx.compose.material.icons.outlined.ExpandMore
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
@@ -54,8 +60,10 @@ import com.photoconvert.android.model.AspectRatioOption
 import com.photoconvert.android.model.ByteFormatter
 import com.photoconvert.android.model.ConvertSettings
 import com.photoconvert.android.model.ConvertedItem
+import com.photoconvert.android.model.ExifPrivacyMode
 import com.photoconvert.android.model.FrameFillMode
 import com.photoconvert.android.model.OutputFormat
+import com.photoconvert.android.model.RedactStyle
 import com.photoconvert.android.model.ResizePreset
 import com.photoconvert.android.model.WatermarkAnchor
 import com.photoconvert.android.ui.components.ChoicePill
@@ -68,20 +76,33 @@ import kotlin.math.roundToInt
 @Composable
 fun ConvertScreen(
     queuedUris: List<Uri>,
+    canTrashOriginals: Boolean,
     settings: ConvertSettings,
     isConverting: Boolean,
+    isDeduplicating: Boolean,
     loupeLoading: Boolean,
     progressDone: Int,
     progressTotal: Int,
     latestBatch: List<ConvertedItem>,
     onPickPhotos: () -> Unit,
+    onDedupeBursts: () -> Unit,
+    onInspectExif: (Uri) -> Unit,
     onInspectLoupe: (Uri) -> Unit,
     onRemoveQueued: (Uri) -> Unit,
     onClearQueue: () -> Unit,
+    onSelectLogoUri: (Uri?) -> Unit,
     onUpdateSettings: ((ConvertSettings) -> ConvertSettings) -> Unit,
-    onRunConvert: () -> Unit
+    onRunConvert: () -> Unit,
+    onShareBatchZip: () -> Unit,
+    onTrashOriginals: () -> Unit
 ) {
     var studioExpanded by remember { mutableStateOf(false) }
+
+    val logoPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia()
+    ) { uri ->
+        if (uri != null) onSelectLogoUri(uri)
+    }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -93,7 +114,19 @@ fun ConvertScreen(
                 title = "Photos",
                 subtitle = "JPG, PNG, WebP, HEIC/AVIF & DNG RAW supported",
                 trailing = if (queuedUris.isNotEmpty()) {
-                    { TextButton(onClick = onClearQueue) { Text("Clear") } }
+                    {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            if (queuedUris.size >= 2) {
+                                TextButton(
+                                    onClick = onDedupeBursts,
+                                    enabled = !isDeduplicating && !isConverting
+                                ) {
+                                    Text("Keep Sharpest")
+                                }
+                            }
+                            TextButton(onClick = onClearQueue) { Text("Clear") }
+                        }
+                    }
                 } else null
             ) {
                 Box(
@@ -119,14 +152,14 @@ fun ConvertScreen(
                             fontWeight = FontWeight.SemiBold
                         )
                         Text(
-                            text = "Tap the compare icon on any queued item for Split Loupe",
+                            text = "Inspect EXIF/GPS (ⓘ) or Split Loupe & Redact on any item",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
 
-                if (loupeLoading) {
+                if (loupeLoading || isDeduplicating) {
                     LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                 }
 
@@ -150,12 +183,23 @@ fun ConvertScreen(
                                     modifier = Modifier.weight(1f)
                                 )
                                 IconButton(
+                                    onClick = { onInspectExif(uri) },
+                                    modifier = Modifier.size(32.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Outlined.Info,
+                                        contentDescription = "Inspect EXIF, GPS & Palette",
+                                        tint = MaterialTheme.colorScheme.secondary,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                                IconButton(
                                     onClick = { onInspectLoupe(uri) },
                                     modifier = Modifier.size(32.dp)
                                 ) {
                                     Icon(
                                         imageVector = Icons.Outlined.Compare,
-                                        contentDescription = "Before/After Loupe",
+                                        contentDescription = "Before/After Loupe & Redact",
                                         tint = MaterialTheme.colorScheme.primary,
                                         modifier = Modifier.size(18.dp)
                                     )
@@ -207,7 +251,6 @@ fun ConvertScreen(
                     }
                 }
 
-                // Compression Mode: Quality % vs Exact Target KB Ceiling (#2)
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -306,14 +349,31 @@ fun ConvertScreen(
                     }
                 }
 
-                SettingSwitchTile(
-                    title = "Strip EXIF & GPS metadata",
-                    subtitle = "Removes location coordinates and camera serials",
-                    checked = settings.stripExif,
-                    onCheckedChange = { c -> onUpdateSettings { it.copy(stripExif = c) } }
-                )
+                // Selective EXIF & GPS Scrubber (#2)
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(
+                        text = "EXIF & GPS PRIVACY",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        ExifPrivacyMode.entries.forEach { mode ->
+                            ChoicePill(
+                                label = mode.label,
+                                selected = settings.exifPrivacyMode == mode,
+                                onClick = { onUpdateSettings { it.copy(exifPrivacyMode = mode) } }
+                            )
+                        }
+                    }
+                    Text(
+                        text = settings.exifPrivacyMode.subtitle,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
 
-                if (!settings.stripExif) {
+                if (settings.exifPrivacyMode != ExifPrivacyMode.STRIP_ALL) {
                     SettingSwitchTile(
                         title = "Repair missing capture dates",
                         subtitle = "Reconstructs EXIF dates from IMG_YYYYMMDD / WhatsApp names",
@@ -329,7 +389,7 @@ fun ConvertScreen(
                     onCheckedChange = { c -> onUpdateSettings { it.copy(normalizeSrgb = c) } }
                 )
 
-                // Progressive Disclosure: Studio Enhancements (#6, #7, #8, #10)
+                // Progressive Disclosure: Studio Enhancements (All Batch 1 + Batch 2 Studio Options)
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -381,6 +441,68 @@ fun ConvertScreen(
                             modifier = Modifier.padding(start = 14.dp, end = 14.dp, bottom = 14.dp),
                             verticalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
+                            // #1 Smart Privacy Redaction
+                            Text(
+                                text = "PRIVACY BLUR & REDACTION",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            SettingSwitchTile(
+                                title = "Auto-Blur Faces",
+                                subtitle = "Offline ML Kit face detection before export",
+                                checked = settings.redactFaces,
+                                onCheckedChange = { c -> onUpdateSettings { it.copy(redactFaces = c) } }
+                            )
+                            SettingSwitchTile(
+                                title = "Redact Sensitive Text & Numbers",
+                                subtitle = "Offline OCR masks emails, phones, cards & plates",
+                                checked = settings.redactText,
+                                onCheckedChange = { c -> onUpdateSettings { it.copy(redactText = c) } }
+                            )
+                            if (settings.redactFaces || settings.redactText || settings.redactBoxesSpec.isNotBlank()) {
+                                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    RedactStyle.entries.forEach { st ->
+                                        ChoicePill(
+                                            label = st.label,
+                                            selected = settings.redactStyle == st,
+                                            onClick = { onUpdateSettings { it.copy(redactStyle = st) } }
+                                        )
+                                    }
+                                }
+                            }
+
+                            // #4 & #6 Scan Deskew + Tone & Micro-Sharpen + Subject Cutout
+                            Text(
+                                text = "SCAN, TONE & CUTOUT",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            SettingSwitchTile(
+                                title = "Auto-Crop & 4-Corner Deskew",
+                                subtitle = "Trims borders and rectifies tilted document scans",
+                                checked = settings.autoDeskew,
+                                onCheckedChange = { c -> onUpdateSettings { it.copy(autoDeskew = c) } }
+                            )
+                            SettingSwitchTile(
+                                title = "Post-Resize Micro-Sharpen",
+                                subtitle = "Restores crispness after downscaling",
+                                checked = settings.postSharpen,
+                                onCheckedChange = { c -> onUpdateSettings { it.copy(postSharpen = c) } }
+                            )
+                            SettingSwitchTile(
+                                title = "Auto-Levels Contrast",
+                                subtitle = "Stretches dull highlights and shadows",
+                                checked = settings.autoLevels,
+                                onCheckedChange = { c -> onUpdateSettings { it.copy(autoLevels = c) } }
+                            )
+                            SettingSwitchTile(
+                                title = "Monochrome Grayscale",
+                                subtitle = "Clean black-and-white luminance output",
+                                checked = settings.grayscale,
+                                onCheckedChange = { c -> onUpdateSettings { it.copy(grayscale = c) } }
+                            )
                             SettingSwitchTile(
                                 title = "Offline Subject Cutout",
                                 subtitle = "ML Kit segmentation to transparent WebP/PNG",
@@ -388,6 +510,7 @@ fun ConvertScreen(
                                 onCheckedChange = { c -> onUpdateSettings { it.copy(removeBackground = c) } }
                             )
 
+                            // #7 Aspect Framing
                             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                 Text(
                                     text = "ASPECT FRAMING",
@@ -417,7 +540,14 @@ fun ConvertScreen(
                                 }
                             }
 
+                            // #7 (Batch 2) Text + Logo Watermark + Diagonal Tiled Proof
                             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text(
+                                    text = "WATERMARK & TILED PROOF",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    fontWeight = FontWeight.SemiBold
+                                )
                                 OutlinedTextField(
                                     value = settings.watermarkText,
                                     onValueChange = { v -> onUpdateSettings { it.copy(watermarkText = v.take(80)) } },
@@ -425,14 +555,47 @@ fun ConvertScreen(
                                     singleLine = true,
                                     modifier = Modifier.fillMaxWidth()
                                 )
-                                if (settings.watermarkText.isNotBlank()) {
-                                    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                        WatermarkAnchor.entries.forEach { anchor ->
-                                            ChoicePill(
-                                                label = anchor.label,
-                                                selected = settings.watermarkAnchor == anchor,
-                                                onClick = { onUpdateSettings { it.copy(watermarkAnchor = anchor) } }
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    OutlinedButton(
+                                        onClick = {
+                                            logoPicker.launch(
+                                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
                                             )
+                                        },
+                                        shape = RoundedCornerShape(10.dp),
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Text(
+                                            if (settings.watermarkLogoUriString.isBlank()) "Pick Logo PNG/WebP"
+                                            else "Logo Active (Change)"
+                                        )
+                                    }
+                                    if (settings.watermarkLogoUriString.isNotBlank()) {
+                                        TextButton(onClick = { onSelectLogoUri(null) }) {
+                                            Text("Clear Logo")
+                                        }
+                                    }
+                                }
+
+                                if (settings.watermarkText.isNotBlank() || settings.watermarkLogoUriString.isNotBlank()) {
+                                    SettingSwitchTile(
+                                        title = "45° Diagonal Tiled Proof",
+                                        subtitle = "Repeats watermark across the entire image",
+                                        checked = settings.watermarkTiled,
+                                        onCheckedChange = { c -> onUpdateSettings { it.copy(watermarkTiled = c) } }
+                                    )
+                                    if (!settings.watermarkTiled) {
+                                        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                            WatermarkAnchor.entries.forEach { anchor ->
+                                                ChoicePill(
+                                                    label = anchor.label,
+                                                    selected = settings.watermarkAnchor == anchor,
+                                                    onClick = { onUpdateSettings { it.copy(watermarkAnchor = anchor) } }
+                                                )
+                                            }
                                         }
                                     }
                                     Row(
@@ -452,6 +615,25 @@ fun ConvertScreen(
                                 }
                             }
 
+                            // Custom EXIF Artist / Copyright (#2)
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                OutlinedTextField(
+                                    value = settings.exifArtist,
+                                    onValueChange = { v -> onUpdateSettings { it.copy(exifArtist = v.take(64)) } },
+                                    label = { Text("EXIF Artist") },
+                                    singleLine = true,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                OutlinedTextField(
+                                    value = settings.exifCopyright,
+                                    onValueChange = { v -> onUpdateSettings { it.copy(exifCopyright = v.take(64)) } },
+                                    label = { Text("EXIF Copyright") },
+                                    singleLine = true,
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+
+                            // Batch Rename Pattern
                             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                 OutlinedTextField(
                                     value = settings.renamePattern,
@@ -519,15 +701,32 @@ fun ConvertScreen(
         if (latestBatch.isNotEmpty()) {
             val savedTotal = latestBatch.sumOf { max(0L, it.savedBytes) }
             item {
-                Text(
-                    text = if (savedTotal > 0L) {
-                        "Latest Batch · Saved ${ByteFormatter.format(savedTotal)}"
-                    } else {
-                        "Latest Batch (${latestBatch.size})"
-                    },
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = if (savedTotal > 0L) {
+                            "Latest Batch · Saved ${ByteFormatter.format(savedTotal)}"
+                        } else {
+                            "Latest Batch (${latestBatch.size})"
+                        },
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        TextButton(onClick = onShareBatchZip) {
+                            Text("Share .zip")
+                        }
+                        if (canTrashOriginals && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                            TextButton(onClick = onTrashOriginals) {
+                                Text("Trash Originals", color = MaterialTheme.colorScheme.error)
+                            }
+                        }
+                    }
+                }
             }
             items(latestBatch, key = { it.id }) { item ->
                 ConvertedItemRow(item = item)

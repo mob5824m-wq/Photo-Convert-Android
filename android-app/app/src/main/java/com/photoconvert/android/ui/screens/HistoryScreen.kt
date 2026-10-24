@@ -32,6 +32,7 @@ import com.photoconvert.android.ui.components.StatTile
 fun HistoryScreen(
     history: List<ConvertedItem>,
     summary: StatsSummary,
+    onExportFilteredZip: (List<ConvertedItem>) -> Unit,
     onDeleteItem: (String) -> Unit,
     onClearAll: () -> Unit
 ) {
@@ -82,7 +83,7 @@ fun HistoryScreen(
         item {
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 OutlinedTextField(
@@ -93,6 +94,11 @@ fun HistoryScreen(
                     shape = RoundedCornerShape(12.dp),
                     modifier = Modifier.weight(1f)
                 )
+                if (filtered.isNotEmpty()) {
+                    TextButton(onClick = { onExportFilteredZip(filtered) }) {
+                        Text(".zip")
+                    }
+                }
                 if (history.isNotEmpty()) {
                     TextButton(onClick = onClearAll) {
                         Text("Clear", color = MaterialTheme.colorScheme.error)

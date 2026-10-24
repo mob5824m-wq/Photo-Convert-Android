@@ -44,11 +44,13 @@ class ConvertStore:
                     saved_pct REAL NOT NULL,
                     quality INTEGER NOT NULL,
                     strip_exif INTEGER NOT NULL,
+                    exif_privacy_mode TEXT NOT NULL DEFAULT 'strip_all',
                     had_exif INTEGER NOT NULL,
                     exif_kept INTEGER NOT NULL,
                     repaired_date INTEGER NOT NULL DEFAULT 0,
                     srgb_normalized INTEGER NOT NULL DEFAULT 1,
                     cutout_applied INTEGER NOT NULL DEFAULT 0,
+                    redacted_regions INTEGER NOT NULL DEFAULT 0,
                     sha256 TEXT NOT NULL,
                     output_path TEXT NOT NULL,
                     created_at TEXT NOT NULL
@@ -65,37 +67,49 @@ class ConvertStore:
                     max_megapixels REAL NOT NULL,
                     max_edge_px INTEGER NOT NULL,
                     strip_exif INTEGER NOT NULL,
+                    exif_privacy_mode TEXT NOT NULL DEFAULT 'strip_all',
                     target_size_kb INTEGER NOT NULL DEFAULT 0,
                     normalize_srgb INTEGER NOT NULL DEFAULT 1,
                     remove_background INTEGER NOT NULL DEFAULT 0,
+                    auto_deskew INTEGER NOT NULL DEFAULT 0,
+                    post_sharpen INTEGER NOT NULL DEFAULT 0,
+                    auto_levels INTEGER NOT NULL DEFAULT 0,
+                    grayscale INTEGER NOT NULL DEFAULT 0,
                     aspect_ratio TEXT NOT NULL DEFAULT 'original',
                     frame_mode TEXT NOT NULL DEFAULT 'blur',
                     watermark_text TEXT NOT NULL DEFAULT '',
+                    watermark_tiled INTEGER NOT NULL DEFAULT 0,
                     rename_pattern TEXT NOT NULL DEFAULT '{orig}'
                 );
                 """
             )
-            # Safe schema migration for any existing local DB
             conv_cols = {r["name"] for r in conn.execute("PRAGMA table_info(conversions)").fetchall()}
-            for col, default in (
-                ("repaired_date", "0"),
-                ("srgb_normalized", "1"),
-                ("cutout_applied", "0"),
+            for col, spec in (
+                ("exif_privacy_mode", "TEXT NOT NULL DEFAULT 'strip_all'"),
+                ("repaired_date", "INTEGER NOT NULL DEFAULT 0"),
+                ("srgb_normalized", "INTEGER NOT NULL DEFAULT 1"),
+                ("cutout_applied", "INTEGER NOT NULL DEFAULT 0"),
+                ("redacted_regions", "INTEGER NOT NULL DEFAULT 0"),
             ):
                 if col not in conv_cols:
-                    conn.execute(f"ALTER TABLE conversions ADD COLUMN {col} INTEGER NOT NULL DEFAULT {default}")
+                    conn.execute(f"ALTER TABLE conversions ADD COLUMN {col} {spec}")
 
             preset_cols = {r["name"] for r in conn.execute("PRAGMA table_info(custom_presets)").fetchall()}
-            migrations = [
+            for col, spec in (
+                ("exif_privacy_mode", "TEXT NOT NULL DEFAULT 'strip_all'"),
                 ("target_size_kb", "INTEGER NOT NULL DEFAULT 0"),
                 ("normalize_srgb", "INTEGER NOT NULL DEFAULT 1"),
                 ("remove_background", "INTEGER NOT NULL DEFAULT 0"),
+                ("auto_deskew", "INTEGER NOT NULL DEFAULT 0"),
+                ("post_sharpen", "INTEGER NOT NULL DEFAULT 0"),
+                ("auto_levels", "INTEGER NOT NULL DEFAULT 0"),
+                ("grayscale", "INTEGER NOT NULL DEFAULT 0"),
                 ("aspect_ratio", "TEXT NOT NULL DEFAULT 'original'"),
                 ("frame_mode", "TEXT NOT NULL DEFAULT 'blur'"),
                 ("watermark_text", "TEXT NOT NULL DEFAULT ''"),
+                ("watermark_tiled", "INTEGER NOT NULL DEFAULT 0"),
                 ("rename_pattern", "TEXT NOT NULL DEFAULT '{orig}'"),
-            ]
-            for col, spec in migrations:
+            ):
                 if col not in preset_cols:
                     conn.execute(f"ALTER TABLE custom_presets ADD COLUMN {col} {spec}")
 
@@ -107,9 +121,9 @@ class ConvertStore:
                     id, original_filename, output_filename, original_format, output_format,
                     mime_type, orig_width, orig_height, out_width, out_height,
                     orig_bytes, out_bytes, saved_bytes, saved_pct, quality,
-                    strip_exif, had_exif, exif_kept, repaired_date, srgb_normalized,
-                    cutout_applied, sha256, output_path, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    strip_exif, exif_privacy_mode, had_exif, exif_kept, repaired_date,
+                    srgb_normalized, cutout_applied, redacted_regions, sha256, output_path, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     item.id,
@@ -128,11 +142,13 @@ class ConvertStore:
                     item.saved_pct,
                     item.quality,
                     int(item.strip_exif),
+                    item.exif_privacy_mode,
                     int(item.had_exif),
                     int(item.exif_kept),
                     int(item.repaired_date),
                     int(item.srgb_normalized),
                     int(item.cutout_applied),
+                    item.redacted_regions,
                     item.sha256,
                     item.output_path,
                     item.created_at,
@@ -160,11 +176,13 @@ class ConvertStore:
             "saved_pct": row["saved_pct"],
             "quality": row["quality"],
             "strip_exif": bool(row["strip_exif"]),
+            "exif_privacy_mode": row["exif_privacy_mode"],
             "had_exif": bool(row["had_exif"]),
             "exif_kept": bool(row["exif_kept"]),
             "repaired_date": bool(row["repaired_date"]),
             "srgb_normalized": bool(row["srgb_normalized"]),
             "cutout_applied": bool(row["cutout_applied"]),
+            "redacted_regions": int(row["redacted_regions"]),
             "sha256": row["sha256"],
             "created_at": row["created_at"],
             "preview_url": f"/api/files/{item_id}",
@@ -190,11 +208,13 @@ class ConvertStore:
             "saved_pct": item.saved_pct,
             "quality": item.quality,
             "strip_exif": item.strip_exif,
+            "exif_privacy_mode": item.exif_privacy_mode,
             "had_exif": item.had_exif,
             "exif_kept": item.exif_kept,
             "repaired_date": item.repaired_date,
             "srgb_normalized": item.srgb_normalized,
             "cutout_applied": item.cutout_applied,
+            "redacted_regions": item.redacted_regions,
             "sha256": item.sha256,
             "created_at": item.created_at,
             "preview_url": f"/api/files/{item.id}",
@@ -282,12 +302,18 @@ class ConvertStore:
                     max_megapixels=row["max_megapixels"],
                     max_edge_px=row["max_edge_px"],
                     strip_exif=bool(row["strip_exif"]),
+                    exif_privacy_mode=row["exif_privacy_mode"],
                     target_size_kb=int(row["target_size_kb"]),
                     normalize_srgb=bool(row["normalize_srgb"]),
                     remove_background=bool(row["remove_background"]),
+                    auto_deskew=bool(row["auto_deskew"]),
+                    post_sharpen=bool(row["post_sharpen"]),
+                    auto_levels=bool(row["auto_levels"]),
+                    grayscale=bool(row["grayscale"]),
                     aspect_ratio=row["aspect_ratio"],
                     frame_mode=row["frame_mode"],
                     watermark_text=row["watermark_text"],
+                    watermark_tiled=bool(row["watermark_tiled"]),
                     rename_pattern=row["rename_pattern"],
                     built_in=False,
                 ).to_dict()
@@ -304,12 +330,18 @@ class ConvertStore:
         max_megapixels: float,
         max_edge_px: int,
         strip_exif: bool,
+        exif_privacy_mode: str = "strip_all",
         target_size_kb: int = 0,
         normalize_srgb: bool = True,
         remove_background: bool = False,
+        auto_deskew: bool = False,
+        post_sharpen: bool = False,
+        auto_levels: bool = False,
+        grayscale: bool = False,
         aspect_ratio: str = "original",
         frame_mode: str = "blur",
         watermark_text: str = "",
+        watermark_tiled: bool = False,
         rename_pattern: str = "{orig}",
     ) -> dict:
         preset_id = f"custom-{uuid.uuid4().hex[:8]}"
@@ -324,12 +356,18 @@ class ConvertStore:
             max_megapixels=max_megapixels,
             max_edge_px=max_edge_px,
             strip_exif=strip_exif,
+            exif_privacy_mode=exif_privacy_mode,
             target_size_kb=target_size_kb,
             normalize_srgb=normalize_srgb,
             remove_background=remove_background,
+            auto_deskew=auto_deskew,
+            post_sharpen=post_sharpen,
+            auto_levels=auto_levels,
+            grayscale=grayscale,
             aspect_ratio=aspect_ratio,  # type: ignore[arg-type]
             frame_mode=frame_mode,  # type: ignore[arg-type]
             watermark_text=watermark_text,
+            watermark_tiled=watermark_tiled,
             rename_pattern=rename_pattern,
             built_in=False,
         )
@@ -338,10 +376,11 @@ class ConvertStore:
                 """
                 INSERT INTO custom_presets (
                     id, name, description, badge, output_format, quality,
-                    resize_mode, max_megapixels, max_edge_px, strip_exif,
-                    target_size_kb, normalize_srgb, remove_background,
-                    aspect_ratio, frame_mode, watermark_text, rename_pattern
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    resize_mode, max_megapixels, max_edge_px, strip_exif, exif_privacy_mode,
+                    target_size_kb, normalize_srgb, remove_background, auto_deskew,
+                    post_sharpen, auto_levels, grayscale,
+                    aspect_ratio, frame_mode, watermark_text, watermark_tiled, rename_pattern
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     profile.id,
@@ -354,12 +393,18 @@ class ConvertStore:
                     profile.max_megapixels,
                     profile.max_edge_px,
                     int(profile.strip_exif),
+                    profile.exif_privacy_mode,
                     profile.target_size_kb,
                     int(profile.normalize_srgb),
                     int(profile.remove_background),
+                    int(profile.auto_deskew),
+                    int(profile.post_sharpen),
+                    int(profile.auto_levels),
+                    int(profile.grayscale),
                     profile.aspect_ratio,
                     profile.frame_mode,
                     profile.watermark_text,
+                    int(profile.watermark_tiled),
                     profile.rename_pattern,
                 ),
             )

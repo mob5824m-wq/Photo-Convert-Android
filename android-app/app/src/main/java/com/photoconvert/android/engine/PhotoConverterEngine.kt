@@ -17,6 +17,7 @@ import androidx.exifinterface.media.ExifInterface
 import com.photoconvert.android.model.AspectRatioOption
 import com.photoconvert.android.model.ConvertSettings
 import com.photoconvert.android.model.ConvertedItem
+import com.photoconvert.android.model.ExifInspectionReport
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -27,6 +28,7 @@ import kotlin.math.max
 import kotlin.math.roundToInt
 
 data class LoupePreviewResult(
+    val sourceUri: Uri,
     val filename: String,
     val beforeBitmap: Bitmap,
     val afterBitmap: Bitmap,
@@ -39,10 +41,35 @@ data class LoupePreviewResult(
     val savedBytes: Long,
     val savedPct: Double,
     val outputFormatLabel: String,
-    val usedQuality: Int
+    val usedQuality: Int,
+    val redactedRegions: Int
 )
 
 class PhotoConverterEngine(private val context: Context) {
+
+    suspend fun inspectUri(uri: Uri): ExifInspectionReport = withContext(Dispatchers.IO) {
+        val (displayName, origSize) = queryMeta(uri)
+        val rawBytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+            ?: error("Unable to read image.")
+        val actualBytes = if (origSize > 0L) origSize else rawBytes.size.toLong()
+        val (orientation, _) = rawBytes.inputStream().use { ExifHelper.readExifSnapshot(it) }
+        val bmp = decodeModernOrRawBitmap(
+            rawBytes = rawBytes,
+            filename = displayName,
+            reqW = 1024,
+            reqH = 1024,
+            normalizeSrgb = false,
+            exifOrientation = orientation
+        )
+        val report = ExifHelper.inspectPhotoMetadata(
+            rawBytes = rawBytes,
+            decodedBitmap = bmp,
+            filename = displayName,
+            origBytes = actualBytes
+        )
+        bmp.recycle()
+        report
+    }
 
     suspend fun convertUri(
         uri: Uri,
@@ -55,22 +82,26 @@ class PhotoConverterEngine(private val context: Context) {
             ?: error("Unable to read selected image.")
         val actualOrigBytes = if (origSize > 0L) origSize else rawBytes.size.toLong()
 
-        val (transformed, origW, origH, exifMap) = runTransformPipeline(
+        val pipeline = runTransformPipeline(
             rawBytes = rawBytes,
             filename = displayName,
             settings = settings
         )
 
         val effectiveFmt = settings.effectiveFormat()
-        val readyForEncode = if (!effectiveFmt.supportsAlpha && transformed.hasAlpha()) {
-            val flattened = Bitmap.createBitmap(transformed.width, transformed.height, Bitmap.Config.ARGB_8888)
+        val readyForEncode = if (!effectiveFmt.supportsAlpha && pipeline.bitmap.hasAlpha()) {
+            val flattened = Bitmap.createBitmap(
+                pipeline.bitmap.width,
+                pipeline.bitmap.height,
+                Bitmap.Config.ARGB_8888
+            )
             val canvas = Canvas(flattened)
             canvas.drawColor(Color.WHITE)
-            canvas.drawBitmap(transformed, 0f, 0f, null)
-            transformed.recycle()
+            canvas.drawBitmap(pipeline.bitmap, 0f, 0f, null)
+            pipeline.bitmap.recycle()
             flattened
         } else {
-            transformed
+            pipeline.bitmap
         }
 
         val encoded = TargetSizeCompressor.encodeWithOptionalCeiling(
@@ -89,7 +120,7 @@ class PhotoConverterEngine(private val context: Context) {
             height = encoded.finalHeight,
             seq = sequenceIndex,
             presetSlug = settings.presetSlug,
-            exifDate = exifMap[ExifInterface.TAG_DATETIME_ORIGINAL]
+            exifDate = pipeline.exifMap[ExifInterface.TAG_DATETIME_ORIGINAL]
         )
 
         val outDir = File(context.filesDir, "converted").apply { mkdirs() }
@@ -97,12 +128,15 @@ class PhotoConverterEngine(private val context: Context) {
         val outFile = File(outDir, "${id}_$outputName")
         FileOutputStream(outFile).use { it.write(encoded.bytes) }
 
-        val (exifKept, repairedDate) = if (!settings.stripExif && effectiveFmt.extension != "png") {
-            ExifHelper.writePreservedExif(
+        val (exifKept, repairedDate) = if (effectiveFmt.extension != "png") {
+            ExifHelper.writeSelectiveExif(
                 targetFile = outFile,
-                attrs = exifMap,
+                attrs = pipeline.exifMap,
+                privacyMode = settings.exifPrivacyMode,
                 originalFilename = displayName,
-                repairFilenameDates = settings.repairFilenameDates
+                repairFilenameDates = settings.repairFilenameDates,
+                exifArtist = settings.exifArtist,
+                exifCopyright = settings.exifCopyright
             )
         } else {
             false to false
@@ -127,8 +161,8 @@ class PhotoConverterEngine(private val context: Context) {
             originalFormat = origExt,
             outputFormat = effectiveFmt.label.uppercase(),
             mimeType = effectiveFmt.mimeType,
-            origWidth = origW,
-            origHeight = origH,
+            origWidth = pipeline.origWidth,
+            origHeight = pipeline.origHeight,
             outWidth = encoded.finalWidth,
             outHeight = encoded.finalHeight,
             origBytes = actualOrigBytes,
@@ -136,41 +170,42 @@ class PhotoConverterEngine(private val context: Context) {
             savedBytes = savedBytes,
             savedPct = savedPct,
             exifKept = exifKept,
+            exifPrivacyMode = settings.exifPrivacyMode.id,
             repairedDate = repairedDate,
             cutoutApplied = settings.removeBackground,
+            redactedRegions = pipeline.redactedRegions,
             localFilePath = outFile.absolutePath,
             createdAtEpochMs = System.currentTimeMillis()
         )
     }
 
-    /**
-     * Build live in-memory Split-Screen Before/After Loupe preview (#1).
-     */
     suspend fun buildLoupePreview(uri: Uri, settings: ConvertSettings): LoupePreviewResult =
         withContext(Dispatchers.IO) {
             val (displayName, origSize) = queryMeta(uri)
             val rawBytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
                 ?: error("Unable to read image for preview.")
             val actualOrigBytes = if (origSize > 0L) origSize else rawBytes.size.toLong()
+            val (orientation, _) = rawBytes.inputStream().use { ExifHelper.readExifSnapshot(it) }
 
             val beforeFull = decodeModernOrRawBitmap(
                 rawBytes = rawBytes,
                 filename = displayName,
                 reqW = 1400,
                 reqH = 1400,
-                normalizeSrgb = false
+                normalizeSrgb = false,
+                exifOrientation = orientation
             )
             val beforeView = clampPreviewBitmap(beforeFull, 1280)
 
-            val (transformed, origW, origH, _) = runTransformPipeline(rawBytes, displayName, settings)
+            val pipeline = runTransformPipeline(rawBytes, displayName, settings)
             val effectiveFmt = settings.effectiveFormat()
             val encoded = TargetSizeCompressor.encodeWithOptionalCeiling(
-                source = transformed,
+                source = pipeline.bitmap,
                 format = effectiveFmt,
                 preferredQuality = settings.clampedQuality(),
                 targetSizeKb = settings.targetSizeKb
             )
-            transformed.recycle()
+            pipeline.bitmap.recycle()
 
             val decodedAfter = BitmapFactory.decodeByteArray(encoded.bytes, 0, encoded.bytes.size)
                 ?: error("Could not decode preview output.")
@@ -185,11 +220,12 @@ class PhotoConverterEngine(private val context: Context) {
             }
 
             LoupePreviewResult(
+                sourceUri = uri,
                 filename = displayName,
                 beforeBitmap = beforeView,
                 afterBitmap = afterView,
-                origWidth = origW,
-                origHeight = origH,
+                origWidth = pipeline.origWidth,
+                origHeight = pipeline.origHeight,
                 outWidth = encoded.finalWidth,
                 outHeight = encoded.finalHeight,
                 origBytes = actualOrigBytes,
@@ -197,7 +233,8 @@ class PhotoConverterEngine(private val context: Context) {
                 savedBytes = savedBytes,
                 savedPct = savedPct,
                 outputFormatLabel = effectiveFmt.label,
-                usedQuality = encoded.usedQuality
+                usedQuality = encoded.usedQuality,
+                redactedRegions = pipeline.redactedRegions
             )
         }
 
@@ -205,7 +242,8 @@ class PhotoConverterEngine(private val context: Context) {
         val bitmap: Bitmap,
         val origWidth: Int,
         val origHeight: Int,
-        val exifMap: Map<String, String>
+        val exifMap: Map<String, String>,
+        val redactedRegions: Int
     )
 
     private suspend fun runTransformPipeline(
@@ -241,24 +279,53 @@ class PhotoConverterEngine(private val context: Context) {
             exifOrientation = orientation
         )
 
+        if (settings.autoDeskew) {
+            val deskewed = DocumentDeskewer.autoDeskewAndTrim(working)
+            if (deskewed !== working) working.recycle()
+            working = deskewed
+        }
+
+        var redactedCount = 0
+        if (settings.redactFaces || settings.redactText || settings.redactBoxesSpec.isNotBlank()) {
+            val (redacted, cnt) = PrivacyRedactor.applyRedactions(
+                src = working,
+                redactFaces = settings.redactFaces,
+                redactText = settings.redactText,
+                redactBoxesSpec = settings.redactBoxesSpec,
+                style = settings.redactStyle
+            )
+            if (redacted !== working) working.recycle()
+            working = redacted
+            redactedCount = cnt
+        }
+
         if (settings.removeBackground) {
             val cut = SubjectCutoutHelper.cutoutForeground(working)
             if (cut !== working) working.recycle()
             working = cut
         }
 
-        if (working.width != targetW || working.height != targetH) {
-            val (recalcW, recalcH) = DimensionCalculator.calculateTargetDimensions(
-                width = working.width,
-                height = working.height,
-                preset = settings.resizePreset,
-                customMaxEdgePx = settings.clampedCustomEdge()
+        val (recalcW, recalcH) = DimensionCalculator.calculateTargetDimensions(
+            width = working.width,
+            height = working.height,
+            preset = settings.resizePreset,
+            customMaxEdgePx = settings.clampedCustomEdge()
+        )
+        if (recalcW != working.width || recalcH != working.height) {
+            val scaled = Bitmap.createScaledBitmap(working, recalcW, recalcH, true)
+            if (scaled !== working) working.recycle()
+            working = scaled
+        }
+
+        if (settings.autoLevels || settings.grayscale || settings.postSharpen) {
+            val toned = ImageEnhancer.applyToneAndSharpen(
+                src = working,
+                autoLevels = settings.autoLevels,
+                grayscale = settings.grayscale,
+                postSharpen = settings.postSharpen
             )
-            if (recalcW != working.width || recalcH != working.height) {
-                val scaled = Bitmap.createScaledBitmap(working, recalcW, recalcH, true)
-                if (scaled !== working) working.recycle()
-                working = scaled
-            }
+            if (toned !== working) working.recycle()
+            working = toned
         }
 
         if (settings.aspectRatio != AspectRatioOption.ORIGINAL) {
@@ -271,23 +338,40 @@ class PhotoConverterEngine(private val context: Context) {
             working = framed
         }
 
+        if (settings.watermarkLogoUriString.isNotBlank()) {
+            val logoBmp = runCatching {
+                val logoUri = Uri.parse(settings.watermarkLogoUriString)
+                context.contentResolver.openInputStream(logoUri)?.use { BitmapFactory.decodeStream(it) }
+            }.getOrNull()
+            if (logoBmp != null) {
+                val withLogo = ImageEnhancer.applyLogoWatermark(
+                    src = working,
+                    logo = logoBmp,
+                    anchor = settings.watermarkAnchor,
+                    opacityPct = settings.clampedWatermarkOpacity(),
+                    tiled = settings.watermarkTiled
+                )
+                logoBmp.recycle()
+                if (withLogo !== working) working.recycle()
+                working = withLogo
+            }
+        }
+
         if (settings.watermarkText.isNotBlank()) {
             val marked = ImageEnhancer.applyWatermark(
                 src = working,
                 text = settings.watermarkText,
                 anchor = settings.watermarkAnchor,
-                opacityPct = settings.clampedWatermarkOpacity()
+                opacityPct = settings.clampedWatermarkOpacity(),
+                tiled = settings.watermarkTiled
             )
             if (marked !== working) working.recycle()
             working = marked
         }
 
-        return TransformResult(working, logicalOrigW, logicalOrigH, exifMap)
+        return TransformResult(working, logicalOrigW, logicalOrigH, exifMap, redactedCount)
     }
 
-    /**
-     * Decodes HEIC/AVIF via hardware ImageDecoder on API 28+ (#5) and normalizes Display P3 -> sRGB (#9).
-     */
     private fun decodeModernOrRawBitmap(
         rawBytes: ByteArray,
         filename: String,

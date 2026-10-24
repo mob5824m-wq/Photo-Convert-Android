@@ -6,16 +6,24 @@ import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.photoconvert.android.data.ConvertRepository
+import com.photoconvert.android.engine.AnimationExporter
+import com.photoconvert.android.engine.BatchZipExporter
+import com.photoconvert.android.engine.BurstDeduplicator
+import com.photoconvert.android.engine.CollageBuilder
 import com.photoconvert.android.engine.LoupePreviewResult
 import com.photoconvert.android.engine.PdfExporter
 import com.photoconvert.android.engine.PhotoConverterEngine
+import com.photoconvert.android.engine.WebPackExporter
+import com.photoconvert.android.model.CollageLayout
 import com.photoconvert.android.model.ConvertSettings
 import com.photoconvert.android.model.ConvertedItem
+import com.photoconvert.android.model.ExifInspectionReport
 import com.photoconvert.android.model.PdfMargin
 import com.photoconvert.android.model.PdfPageSize
 import com.photoconvert.android.model.PresetProfile
 import com.photoconvert.android.model.StatsSummary
 import com.photoconvert.android.model.WatchedFolderState
+import com.photoconvert.android.model.WebPackBundleResult
 import com.photoconvert.android.worker.WatchedFolderWorker
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -28,14 +36,24 @@ data class ConvertUiState(
     val selectedTab: Int = 0,
     val darkThemeOverride: Boolean? = null,
     val queuedUris: List<Uri> = emptyList(),
+    val lastBatchSourceUris: List<Uri> = emptyList(),
     val settings: ConvertSettings = ConvertSettings(),
     val isConverting: Boolean = false,
+    val isDeduplicating: Boolean = false,
     val progressDone: Int = 0,
     val progressTotal: Int = 0,
     val loupeLoading: Boolean = false,
     val loupePreview: LoupePreviewResult? = null,
+    val exifReport: ExifInspectionReport? = null,
     val isBuildingPdf: Boolean = false,
     val latestPdfFile: File? = null,
+    val isBuildingCollage: Boolean = false,
+    val latestCollageFile: File? = null,
+    val isBuildingAnimation: Boolean = false,
+    val latestAnimationFile: File? = null,
+    val isBuildingWebPack: Boolean = false,
+    val latestWebPack: WebPackBundleResult? = null,
+    val latestBatchZipFile: File? = null,
     val watchedFolder: WatchedFolderState = WatchedFolderState(),
     val latestBatch: List<ConvertedItem> = emptyList(),
     val presets: List<PresetProfile> = emptyList(),
@@ -49,6 +67,10 @@ class ConvertViewModel(application: Application) : AndroidViewModel(application)
     private val repo = ConvertRepository(application)
     private val engine = PhotoConverterEngine(application)
     private val pdfExporter = PdfExporter(application)
+    private val collageBuilder = CollageBuilder(application)
+    private val animationExporter = AnimationExporter(application)
+    private val zipExporter = BatchZipExporter(application)
+    private val webPackExporter = WebPackExporter(application)
 
     private val _uiState = MutableStateFlow(loadInitialState())
     val uiState: StateFlow<ConvertUiState> = _uiState.asStateFlow()
@@ -63,6 +85,18 @@ class ConvertViewModel(application: Application) : AndroidViewModel(application)
             history = history,
             summary = repo.computeSummary(history)
         )
+    }
+
+    fun handleShortcutAction(actionCode: String?) {
+        if (actionCode.isNullOrBlank()) return
+        when {
+            actionCode == "tab:tools" -> selectTab(1)
+            actionCode.startsWith("preset:") -> {
+                val id = actionCode.removePrefix("preset:")
+                val found = _uiState.value.presets.firstOrNull { it.id == id }
+                if (found != null) applyPreset(found)
+            }
+        }
     }
 
     fun selectTab(index: Int) {
@@ -99,6 +133,35 @@ class ConvertViewModel(application: Application) : AndroidViewModel(application)
         _uiState.update { it.copy(queuedUris = emptyList()) }
     }
 
+    fun dedupeQueuedBursts() {
+        val queue = _uiState.value.queuedUris
+        if (queue.size < 2 || _uiState.value.isDeduplicating) return
+        val app = getApplication<Application>()
+        viewModelScope.launch {
+            _uiState.update { it.copy(isDeduplicating = true) }
+            runCatching { BurstDeduplicator.dedupeQueue(app, queue) }
+                .onSuccess { outcome ->
+                    val msg = if (outcome.droppedCount == 0) {
+                        "No near-duplicate burst photos found!"
+                    } else {
+                        "Removed ${outcome.droppedCount} duplicate/blurry burst shot(s)"
+                    }
+                    _uiState.update {
+                        it.copy(
+                            isDeduplicating = false,
+                            queuedUris = outcome.keptUris,
+                            statusMessage = msg
+                        )
+                    }
+                }
+                .onFailure { err ->
+                    _uiState.update {
+                        it.copy(isDeduplicating = false, statusMessage = err.message ?: "De-dupe failed")
+                    }
+                }
+        }
+    }
+
     fun updateSettings(transform: (ConvertSettings) -> ConvertSettings) {
         _uiState.update { state ->
             val updated = transform(state.settings).copy(
@@ -108,6 +171,19 @@ class ConvertViewModel(application: Application) : AndroidViewModel(application)
             repo.saveSettings(updated)
             state.copy(settings = updated)
         }
+    }
+
+    fun selectWatermarkLogo(uri: Uri?) {
+        val app = getApplication<Application>()
+        if (uri != null) {
+            runCatching {
+                app.contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            }
+        }
+        updateSettings { it.copy(watermarkLogoUriString = uri?.toString().orEmpty()) }
     }
 
     fun applyPreset(preset: PresetProfile) {
@@ -137,6 +213,22 @@ class ConvertViewModel(application: Application) : AndroidViewModel(application)
         _uiState.update { it.copy(presets = updatedPresets) }
     }
 
+    fun inspectUriExif(uri: Uri) {
+        viewModelScope.launch {
+            runCatching { engine.inspectUri(uri) }
+                .onSuccess { report ->
+                    _uiState.update { it.copy(exifReport = report) }
+                }
+                .onFailure { err ->
+                    _uiState.update { it.copy(statusMessage = err.message ?: "Could not inspect EXIF") }
+                }
+        }
+    }
+
+    fun closeExifInspector() {
+        _uiState.update { it.copy(exifReport = null) }
+    }
+
     fun openLoupePreview(uri: Uri) {
         if (_uiState.value.loupeLoading) return
         val settings = _uiState.value.settings
@@ -157,6 +249,20 @@ class ConvertViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    fun addCustomLoupeRedactBox(normBoxSpec: String) {
+        val preview = _uiState.value.loupePreview ?: return
+        val existing = _uiState.value.settings.redactBoxesSpec
+        val merged = if (existing.isBlank()) normBoxSpec else "$existing;$normBoxSpec"
+        updateSettings { it.copy(redactBoxesSpec = merged) }
+        openLoupePreview(preview.sourceUri)
+    }
+
+    fun clearCustomLoupeRedactBoxes() {
+        val preview = _uiState.value.loupePreview
+        updateSettings { it.copy(redactBoxesSpec = "") }
+        if (preview != null) openLoupePreview(preview.sourceUri)
+    }
+
     fun closeLoupePreview() {
         _uiState.update { it.copy(loupePreview = null) }
     }
@@ -168,15 +274,24 @@ class ConvertViewModel(application: Application) : AndroidViewModel(application)
 
         viewModelScope.launch {
             _uiState.update {
-                it.copy(isConverting = true, progressDone = 0, progressTotal = queue.size)
+                it.copy(
+                    isConverting = true,
+                    progressDone = 0,
+                    progressTotal = queue.size,
+                    latestBatchZipFile = null
+                )
             }
 
             val converted = mutableListOf<ConvertedItem>()
+            val succeededSourceUris = mutableListOf<Uri>()
             var failures = 0
 
             for ((idx, uri) in queue.withIndex()) {
                 runCatching { engine.convertUri(uri, settings, sequenceIndex = idx + 1) }
-                    .onSuccess { converted.add(it) }
+                    .onSuccess {
+                        converted.add(it)
+                        succeededSourceUris.add(uri)
+                    }
                     .onFailure { failures++ }
                 _uiState.update { it.copy(progressDone = idx + 1) }
             }
@@ -199,6 +314,7 @@ class ConvertViewModel(application: Application) : AndroidViewModel(application)
                 it.copy(
                     isConverting = false,
                     queuedUris = emptyList(),
+                    lastBatchSourceUris = succeededSourceUris,
                     latestBatch = converted,
                     history = updatedHistory,
                     summary = repo.computeSummary(updatedHistory),
@@ -208,11 +324,40 @@ class ConvertViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    fun clearLastBatchSourceUris(trashed: Boolean) {
+        _uiState.update {
+            it.copy(
+                lastBatchSourceUris = emptyList(),
+                statusMessage = if (trashed) "Moved original photo(s) to system Trash" else null
+            )
+        }
+    }
+
+    fun exportItemsAsZip(items: List<ConvertedItem>, onReady: (File) -> Unit) {
+        if (items.isEmpty()) return
+        viewModelScope.launch {
+            runCatching { zipExporter.exportItemsToZip(items) }
+                .onSuccess { zip ->
+                    _uiState.update {
+                        it.copy(
+                            latestBatchZipFile = zip,
+                            statusMessage = "Saved ${zip.name} to Downloads/PhotoConvert"
+                        )
+                    }
+                    onReady(zip)
+                }
+                .onFailure { err ->
+                    _uiState.update { it.copy(statusMessage = err.message ?: "ZIP export failed") }
+                }
+        }
+    }
+
     fun buildPdfDocument(
         uris: List<Uri>,
         pageSize: PdfPageSize,
         margin: PdfMargin,
-        scanFilter: Boolean
+        scanFilter: Boolean,
+        autoDeskew: Boolean
     ) {
         if (uris.isEmpty() || _uiState.value.isBuildingPdf) return
         viewModelScope.launch {
@@ -222,7 +367,8 @@ class ConvertViewModel(application: Application) : AndroidViewModel(application)
                     uris = uris,
                     pageSize = pageSize,
                     margin = margin,
-                    documentScanFilter = scanFilter
+                    documentScanFilter = scanFilter,
+                    autoDeskew = autoDeskew
                 )
             }.onSuccess { pdfFile ->
                 _uiState.update {
@@ -234,12 +380,75 @@ class ConvertViewModel(application: Application) : AndroidViewModel(application)
                 }
             }.onFailure { err ->
                 _uiState.update {
-                    it.copy(
-                        isBuildingPdf = false,
-                        statusMessage = err.message ?: "Could not create PDF"
-                    )
+                    it.copy(isBuildingPdf = false, statusMessage = err.message ?: "Could not create PDF")
                 }
             }
+        }
+    }
+
+    fun buildCollageSheet(uris: List<Uri>, layout: CollageLayout, showCaptions: Boolean) {
+        if (uris.isEmpty() || _uiState.value.isBuildingCollage) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(isBuildingCollage = true) }
+            runCatching { collageBuilder.buildCollageSheet(uris, layout, showCaptions) }
+                .onSuccess { file ->
+                    _uiState.update {
+                        it.copy(
+                            isBuildingCollage = false,
+                            latestCollageFile = file,
+                            statusMessage = "Saved ${layout.label} to Pictures/PhotoConvert"
+                        )
+                    }
+                }
+                .onFailure { err ->
+                    _uiState.update {
+                        it.copy(isBuildingCollage = false, statusMessage = err.message ?: "Collage failed")
+                    }
+                }
+        }
+    }
+
+    fun buildBurstAnimation(uris: List<Uri>, delayMs: Int, boomerang: Boolean) {
+        if (uris.size < 2 || _uiState.value.isBuildingAnimation) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(isBuildingAnimation = true) }
+            runCatching { animationExporter.exportBurstGif(uris, delayMs, boomerang) }
+                .onSuccess { gif ->
+                    _uiState.update {
+                        it.copy(
+                            isBuildingAnimation = false,
+                            latestAnimationFile = gif,
+                            statusMessage = "Saved Animated GIF to Pictures/PhotoConvert"
+                        )
+                    }
+                }
+                .onFailure { err ->
+                    _uiState.update {
+                        it.copy(isBuildingAnimation = false, statusMessage = err.message ?: "Animation failed")
+                    }
+                }
+        }
+    }
+
+    fun buildResponsiveWebPack(uri: Uri) {
+        if (_uiState.value.isBuildingWebPack) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(isBuildingWebPack = true) }
+            runCatching { webPackExporter.buildResponsiveWebPack(uri) }
+                .onSuccess { bundle ->
+                    _uiState.update {
+                        it.copy(
+                            isBuildingWebPack = false,
+                            latestWebPack = bundle,
+                            statusMessage = "Saved ${bundle.zipFile.name} to Downloads/PhotoConvert"
+                        )
+                    }
+                }
+                .onFailure { err ->
+                    _uiState.update {
+                        it.copy(isBuildingWebPack = false, statusMessage = err.message ?: "Web Pack failed")
+                    }
+                }
         }
     }
 

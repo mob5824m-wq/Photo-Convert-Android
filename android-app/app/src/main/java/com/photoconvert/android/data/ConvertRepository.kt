@@ -5,9 +5,11 @@ import com.photoconvert.android.model.AspectRatioOption
 import com.photoconvert.android.model.ConvertSettings
 import com.photoconvert.android.model.ConvertedItem
 import com.photoconvert.android.model.DefaultPresets
+import com.photoconvert.android.model.ExifPrivacyMode
 import com.photoconvert.android.model.FrameFillMode
 import com.photoconvert.android.model.OutputFormat
 import com.photoconvert.android.model.PresetProfile
+import com.photoconvert.android.model.RedactStyle
 import com.photoconvert.android.model.ResizePreset
 import com.photoconvert.android.model.StatsSummary
 import com.photoconvert.android.model.WatermarkAnchor
@@ -33,21 +35,36 @@ class ConvertRepository(context: Context) {
     }
 
     fun loadSettings(): ConvertSettings {
+        val fallbackStrip = prefs.getBoolean(KEY_STRIP_EXIF, true)
+        val defaultPrivId = if (fallbackStrip) "strip_all" else "keep_all"
         return ConvertSettings(
             format = OutputFormat.fromId(prefs.getString(KEY_FORMAT, "webp") ?: "webp"),
             quality = prefs.getInt(KEY_QUALITY, 85),
             targetSizeKb = prefs.getInt(KEY_TARGET_KB, 0),
             resizePreset = ResizePreset.fromId(prefs.getString(KEY_RESIZE, "original") ?: "original"),
             customMaxEdgePx = prefs.getInt(KEY_CUSTOM_EDGE, 2048),
-            stripExif = prefs.getBoolean(KEY_STRIP_EXIF, true),
+            exifPrivacyMode = ExifPrivacyMode.fromId(
+                prefs.getString(KEY_EXIF_PRIVACY_MODE, defaultPrivId) ?: defaultPrivId
+            ),
+            exifArtist = prefs.getString(KEY_EXIF_ARTIST, "") ?: "",
+            exifCopyright = prefs.getString(KEY_EXIF_COPYRIGHT, "") ?: "",
             repairFilenameDates = prefs.getBoolean(KEY_REPAIR_DATES, true),
             normalizeSrgb = prefs.getBoolean(KEY_NORMALIZE_SRGB, true),
             removeBackground = prefs.getBoolean(KEY_REMOVE_BG, false),
+            autoDeskew = prefs.getBoolean(KEY_AUTO_DESKEW, false),
+            postSharpen = prefs.getBoolean(KEY_POST_SHARPEN, false),
+            autoLevels = prefs.getBoolean(KEY_AUTO_LEVELS, false),
+            grayscale = prefs.getBoolean(KEY_GRAYSCALE, false),
+            redactFaces = prefs.getBoolean(KEY_REDACT_FACES, false),
+            redactText = prefs.getBoolean(KEY_REDACT_TEXT, false),
+            redactStyle = RedactStyle.fromId(prefs.getString(KEY_REDACT_STYLE, "blur") ?: "blur"),
             aspectRatio = AspectRatioOption.fromId(prefs.getString(KEY_ASPECT_RATIO, "original") ?: "original"),
             frameFillMode = FrameFillMode.fromId(prefs.getString(KEY_FRAME_FILL, "blur") ?: "blur"),
             watermarkText = prefs.getString(KEY_WM_TEXT, "") ?: "",
+            watermarkLogoUriString = prefs.getString(KEY_WM_LOGO_URI, "") ?: "",
             watermarkAnchor = WatermarkAnchor.fromId(prefs.getString(KEY_WM_ANCHOR, "bottom-right") ?: "bottom-right"),
             watermarkOpacity = prefs.getInt(KEY_WM_OPACITY, 65),
+            watermarkTiled = prefs.getBoolean(KEY_WM_TILED, false),
             renamePattern = prefs.getString(KEY_RENAME_PATTERN, "{orig}") ?: "{orig}",
             presetSlug = prefs.getString(KEY_PRESET_SLUG, "custom") ?: "custom",
             activePresetName = prefs.getString(KEY_PRESET_NAME, "Custom configuration") ?: "Custom configuration"
@@ -62,14 +79,26 @@ class ConvertRepository(context: Context) {
             .putString(KEY_RESIZE, settings.resizePreset.id)
             .putInt(KEY_CUSTOM_EDGE, settings.clampedCustomEdge())
             .putBoolean(KEY_STRIP_EXIF, settings.stripExif)
+            .putString(KEY_EXIF_PRIVACY_MODE, settings.exifPrivacyMode.id)
+            .putString(KEY_EXIF_ARTIST, settings.exifArtist)
+            .putString(KEY_EXIF_COPYRIGHT, settings.exifCopyright)
             .putBoolean(KEY_REPAIR_DATES, settings.repairFilenameDates)
             .putBoolean(KEY_NORMALIZE_SRGB, settings.normalizeSrgb)
             .putBoolean(KEY_REMOVE_BG, settings.removeBackground)
+            .putBoolean(KEY_AUTO_DESKEW, settings.autoDeskew)
+            .putBoolean(KEY_POST_SHARPEN, settings.postSharpen)
+            .putBoolean(KEY_AUTO_LEVELS, settings.autoLevels)
+            .putBoolean(KEY_GRAYSCALE, settings.grayscale)
+            .putBoolean(KEY_REDACT_FACES, settings.redactFaces)
+            .putBoolean(KEY_REDACT_TEXT, settings.redactText)
+            .putString(KEY_REDACT_STYLE, settings.redactStyle.id)
             .putString(KEY_ASPECT_RATIO, settings.aspectRatio.id)
             .putString(KEY_FRAME_FILL, settings.frameFillMode.id)
             .putString(KEY_WM_TEXT, settings.watermarkText)
+            .putString(KEY_WM_LOGO_URI, settings.watermarkLogoUriString)
             .putString(KEY_WM_ANCHOR, settings.watermarkAnchor.id)
             .putInt(KEY_WM_OPACITY, settings.clampedWatermarkOpacity())
+            .putBoolean(KEY_WM_TILED, settings.watermarkTiled)
             .putString(KEY_RENAME_PATTERN, settings.renamePattern.ifBlank { "{orig}" })
             .putString(KEY_PRESET_SLUG, settings.presetSlug)
             .putString(KEY_PRESET_NAME, settings.activePresetName)
@@ -83,6 +112,7 @@ class ConvertRepository(context: Context) {
             val arr = JSONArray(customJson)
             for (i in 0 until arr.length()) {
                 val obj = arr.getJSONObject(i)
+                val fallbackPriv = if (obj.optBoolean("stripExif", true)) "strip_all" else "keep_all"
                 customList.add(
                     PresetProfile(
                         id = obj.getString("id"),
@@ -93,13 +123,18 @@ class ConvertRepository(context: Context) {
                         quality = obj.optInt("quality", 85),
                         resizePreset = ResizePreset.fromId(obj.optString("resizePreset", "original")),
                         customMaxEdgePx = obj.optInt("customMaxEdgePx", 2048),
-                        stripExif = obj.optBoolean("stripExif", true),
+                        exifPrivacyMode = ExifPrivacyMode.fromId(obj.optString("exifPrivacyMode", fallbackPriv)),
                         targetSizeKb = obj.optInt("targetSizeKb", 0),
                         normalizeSrgb = obj.optBoolean("normalizeSrgb", true),
                         removeBackground = obj.optBoolean("removeBackground", false),
+                        autoDeskew = obj.optBoolean("autoDeskew", false),
+                        postSharpen = obj.optBoolean("postSharpen", false),
+                        autoLevels = obj.optBoolean("autoLevels", false),
+                        grayscale = obj.optBoolean("grayscale", false),
                         aspectRatio = AspectRatioOption.fromId(obj.optString("aspectRatio", "original")),
                         frameFillMode = FrameFillMode.fromId(obj.optString("frameFillMode", "blur")),
                         watermarkText = obj.optString("watermarkText", ""),
+                        watermarkTiled = obj.optBoolean("watermarkTiled", false),
                         renamePattern = obj.optString("renamePattern", "{orig}"),
                         builtIn = false
                     )
@@ -123,13 +158,18 @@ class ConvertRepository(context: Context) {
             quality = settings.clampedQuality(),
             resizePreset = settings.resizePreset,
             customMaxEdgePx = settings.clampedCustomEdge(),
-            stripExif = settings.stripExif,
+            exifPrivacyMode = settings.exifPrivacyMode,
             targetSizeKb = settings.targetSizeKb,
             normalizeSrgb = settings.normalizeSrgb,
             removeBackground = settings.removeBackground,
+            autoDeskew = settings.autoDeskew,
+            postSharpen = settings.postSharpen,
+            autoLevels = settings.autoLevels,
+            grayscale = settings.grayscale,
             aspectRatio = settings.aspectRatio,
             frameFillMode = settings.frameFillMode,
             watermarkText = settings.watermarkText,
+            watermarkTiled = settings.watermarkTiled,
             renamePattern = settings.renamePattern,
             builtIn = false
         )
@@ -156,13 +196,18 @@ class ConvertRepository(context: Context) {
                     .put("quality", p.quality)
                     .put("resizePreset", p.resizePreset.id)
                     .put("customMaxEdgePx", p.customMaxEdgePx)
-                    .put("stripExif", p.stripExif)
+                    .put("exifPrivacyMode", p.exifPrivacyMode.id)
                     .put("targetSizeKb", p.targetSizeKb)
                     .put("normalizeSrgb", p.normalizeSrgb)
                     .put("removeBackground", p.removeBackground)
+                    .put("autoDeskew", p.autoDeskew)
+                    .put("postSharpen", p.postSharpen)
+                    .put("autoLevels", p.autoLevels)
+                    .put("grayscale", p.grayscale)
                     .put("aspectRatio", p.aspectRatio.id)
                     .put("frameFillMode", p.frameFillMode.id)
                     .put("watermarkText", p.watermarkText)
+                    .put("watermarkTiled", p.watermarkTiled)
                     .put("renamePattern", p.renamePattern)
             )
         }
@@ -225,8 +270,10 @@ class ConvertRepository(context: Context) {
                         savedBytes = obj.getLong("savedBytes"),
                         savedPct = obj.getDouble("savedPct"),
                         exifKept = obj.optBoolean("exifKept", false),
+                        exifPrivacyMode = obj.optString("exifPrivacyMode", "strip_all"),
                         repairedDate = obj.optBoolean("repairedDate", false),
                         cutoutApplied = obj.optBoolean("cutoutApplied", false),
+                        redactedRegions = obj.optInt("redactedRegions", 0),
                         localFilePath = obj.getString("localFilePath"),
                         createdAtEpochMs = obj.getLong("createdAtEpochMs")
                     )
@@ -299,8 +346,10 @@ class ConvertRepository(context: Context) {
                     .put("savedBytes", item.savedBytes)
                     .put("savedPct", item.savedPct)
                     .put("exifKept", item.exifKept)
+                    .put("exifPrivacyMode", item.exifPrivacyMode)
                     .put("repairedDate", item.repairedDate)
                     .put("cutoutApplied", item.cutoutApplied)
+                    .put("redactedRegions", item.redactedRegions)
                     .put("localFilePath", item.localFilePath)
                     .put("createdAtEpochMs", item.createdAtEpochMs)
             )
@@ -316,14 +365,26 @@ class ConvertRepository(context: Context) {
         const val KEY_RESIZE = "resize_preset"
         const val KEY_CUSTOM_EDGE = "custom_edge"
         const val KEY_STRIP_EXIF = "strip_exif"
+        const val KEY_EXIF_PRIVACY_MODE = "exif_privacy_mode"
+        const val KEY_EXIF_ARTIST = "exif_artist"
+        const val KEY_EXIF_COPYRIGHT = "exif_copyright"
         const val KEY_REPAIR_DATES = "repair_filename_dates"
         const val KEY_NORMALIZE_SRGB = "normalize_srgb"
         const val KEY_REMOVE_BG = "remove_background"
+        const val KEY_AUTO_DESKEW = "auto_deskew"
+        const val KEY_POST_SHARPEN = "post_sharpen"
+        const val KEY_AUTO_LEVELS = "auto_levels"
+        const val KEY_GRAYSCALE = "grayscale"
+        const val KEY_REDACT_FACES = "redact_faces"
+        const val KEY_REDACT_TEXT = "redact_text"
+        const val KEY_REDACT_STYLE = "redact_style"
         const val KEY_ASPECT_RATIO = "aspect_ratio"
         const val KEY_FRAME_FILL = "frame_fill"
         const val KEY_WM_TEXT = "watermark_text"
+        const val KEY_WM_LOGO_URI = "watermark_logo_uri"
         const val KEY_WM_ANCHOR = "watermark_anchor"
         const val KEY_WM_OPACITY = "watermark_opacity"
+        const val KEY_WM_TILED = "watermark_tiled"
         const val KEY_RENAME_PATTERN = "rename_pattern"
         const val KEY_PRESET_SLUG = "preset_slug"
         const val KEY_PRESET_NAME = "preset_name"

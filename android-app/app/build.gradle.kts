@@ -3,8 +3,8 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
-val resolvedVersionName = (project.findProperty("appVersionName") as String?) ?: "1.0.0"
-val resolvedVersionCode = ((project.findProperty("appVersionCode") as String?)?.toIntOrNull()) ?: 1
+val resolvedVersionName = (project.findProperty("appVersionName") as String?) ?: "1.2.0"
+val resolvedVersionCode = ((project.findProperty("appVersionCode") as String?)?.toIntOrNull()) ?: 3
 
 android {
     namespace = "com.photoconvert.android"
@@ -99,6 +99,8 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.8.1")
     implementation("com.google.android.gms:play-services-mlkit-subject-segmentation:16.0.0-beta1")
+    implementation("com.google.android.gms:play-services-mlkit-face-detection:17.1.0")
+    implementation("com.google.android.gms:play-services-mlkit-text-recognition:19.0.1")
 
     testImplementation("junit:junit:4.13.2")
 }

@@ -1,4 +1,4 @@
-"""Batch Photo-to-PDF & High-Contrast Scan Sheet Exporter (#3)."""
+"""Batch Photo-to-PDF & High-Contrast Scan Sheet Exporter (#3 & #4)."""
 
 from __future__ import annotations
 
@@ -8,11 +8,11 @@ from typing import Literal
 from PIL import Image, ImageEnhance, ImageOps
 
 from server.converter import decode_input_image
+from server.deskew import auto_deskew_document
 
 PageSize = Literal["a4", "letter", "fit"]
 MarginSize = Literal["none", "small", "standard"]
 
-# 150 DPI page dimensions (crisp print/screen balance with compact PDF size)
 PAGE_SPECS_PX: dict[str, tuple[int, int]] = {
     "a4": (1240, 1754),
     "letter": (1275, 1650),
@@ -30,9 +30,10 @@ def build_pdf_from_images(
     page_size: str = "a4",
     margin: str = "small",
     document_scan_filter: bool = False,
+    auto_deskew: bool = False,
     jpeg_quality: int = 84,
 ) -> bytes:
-    """Pack one or more images into an optimized multi-page PDF."""
+    """Pack one or more images into an optimized multi-page PDF with optional deskew & scan filter."""
     if not images:
         raise ValueError("Provide at least one image to build a PDF.")
 
@@ -47,7 +48,6 @@ def build_pdf_from_images(
     for filename, raw in images:
         decoded, _, _ = decode_input_image(raw, filename)
 
-        # Composite transparency onto clean white paper
         if decoded.mode in ("RGBA", "LA") or ("transparency" in decoded.info):
             rgba = decoded.convert("RGBA")
             white = Image.new("RGB", rgba.size, (255, 255, 255))
@@ -55,6 +55,9 @@ def build_pdf_from_images(
             img = white
         else:
             img = decoded.convert("RGB")
+
+        if auto_deskew:
+            img = auto_deskew_document(img)
 
         if document_scan_filter:
             gray = ImageOps.grayscale(img)
@@ -64,7 +67,6 @@ def build_pdf_from_images(
             img = gray.convert("RGB")
 
         if psize == "fit":
-            # Clamp extreme dimensions to keep PDF compact
             if max(img.size) > 2400:
                 img.thumbnail((2400, 2400), Image.Resampling.LANCZOS)
             if margin_px > 0:
@@ -79,7 +81,6 @@ def build_pdf_from_images(
                 rendered_pages.append(img)
         else:
             base_w, base_h = PAGE_SPECS_PX[psize]
-            # Match page orientation to photo orientation
             if img.width > img.height:
                 page_w, page_h = base_h, base_w
             else:
@@ -96,7 +97,6 @@ def build_pdf_from_images(
             page.paste(fitted, (ox, oy))
             rendered_pages.append(page)
 
-    # Pre-compress pages via JPEG at target quality so embedded PDF streams stay small
     compressed_pages: list[Image.Image] = []
     q = max(40, min(95, int(jpeg_quality)))
     for pg in rendered_pages:

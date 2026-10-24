@@ -172,8 +172,13 @@ fun PresetsScreen(
                         if (preset.aspectRatio != AspectRatioOption.ORIGINAL) {
                             add("${preset.aspectRatio.label} ${preset.frameFillMode.label}")
                         }
+                        if (preset.autoDeskew) add("Deskew")
+                        if (preset.postSharpen) add("Sharpen")
+                        if (preset.autoLevels) add("Auto-Levels")
+                        if (preset.grayscale) add("B&W")
+                        if (preset.watermarkTiled) add("Tiled Proof")
                         if (preset.removeBackground) add("Cutout")
-                        add(if (preset.stripExif) "No EXIF" else "EXIF kept")
+                        add(preset.exifPrivacyMode.label)
                     }.joinToString(" · ")
 
                     Text(

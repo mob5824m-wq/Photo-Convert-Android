@@ -1,5 +1,6 @@
 import { api } from "./api.js";
 import { describeResize, escapeHtml, formatBytes } from "./formatters.js";
+import { createInspectorController } from "./inspector.js";
 import { createLoupeController } from "./loupe.js";
 import { createToolsController } from "./tools.js";
 
@@ -8,20 +9,33 @@ const LOSSLESS = new Set(["png", "bmp"]);
 const state = {
   queuedFiles: [],
   outputFormat: "webp",
-  compressionMode: "quality", // "quality" | "target"
+  compressionMode: "quality",
   quality: 85,
   targetSizeKb: 500,
   resizeKey: "original",
   customEdge: 2048,
-  stripExif: true,
+  exifPrivacyMode: "strip_all", // "strip_all" | "gps_only" | "keep_all"
+  exifArtist: "",
+  exifCopyright: "",
   repairFilenameDates: true,
   normalizeSrgb: true,
   removeBackground: false,
+  autoDeskew: false,
+  postSharpen: false,
+  autoLevels: false,
+  grayscale: false,
+  redactFaces: false,
+  redactText: false,
+  redactBoxes: "",
+  redactBoxCount: 0,
+  redactStyle: "blur",
   aspectRatio: "original",
   frameMode: "blur",
   watermarkText: "",
+  watermarkLogoFile: null,
   watermarkPosition: "bottom-right",
   watermarkOpacity: 65,
+  watermarkTiled: false,
   renamePattern: "{orig}",
   presetSlug: "custom",
   activePresetName: "Custom configuration",
@@ -69,15 +83,27 @@ function currentOptionsPayload() {
     resize_mode: resizeMode,
     max_megapixels: maxMegapixels,
     max_edge_px: maxEdgePx,
-    strip_exif: state.stripExif,
+    strip_exif: state.exifPrivacyMode === "strip_all",
+    exif_privacy_mode: state.exifPrivacyMode,
+    exif_artist: state.exifArtist,
+    exif_copyright: state.exifCopyright,
     repair_filename_dates: state.repairFilenameDates,
     normalize_srgb: state.normalizeSrgb,
     remove_background: state.removeBackground,
+    auto_deskew: state.autoDeskew,
+    post_sharpen: state.postSharpen,
+    auto_levels: state.autoLevels,
+    grayscale: state.grayscale,
+    redact_faces: state.redactFaces,
+    redact_text: state.redactText,
+    redact_boxes: state.redactBoxes,
+    redact_style: state.redactStyle,
     aspect_ratio: state.aspectRatio,
     frame_mode: state.frameMode,
     watermark_text: state.watermarkText,
     watermark_position: state.watermarkPosition,
     watermark_opacity: state.watermarkOpacity,
+    watermark_tiled: state.watermarkTiled,
     rename_pattern: state.renamePattern || "{orig}",
     preset_slug: state.presetSlug,
   };
@@ -97,8 +123,12 @@ function switchTab(tabName) {
 function countActiveEnhancements() {
   let count = 0;
   if (state.removeBackground) count += 1;
+  if (state.autoDeskew) count += 1;
+  if (state.postSharpen || state.autoLevels || state.grayscale) count += 1;
+  if (state.redactFaces || state.redactText || state.redactBoxCount > 0) count += 1;
   if (state.aspectRatio !== "original") count += 1;
-  if (state.watermarkText.trim()) count += 1;
+  if (state.watermarkText.trim() || state.watermarkLogoFile) count += 1;
+  if (state.exifArtist.trim() || state.exifCopyright.trim()) count += 1;
   if ((state.renamePattern || "{orig}").trim() !== "{orig}") count += 1;
   return count;
 }
@@ -139,13 +169,38 @@ function syncSettingsControls() {
   el("customEdgeWrap").hidden = state.resizeKey !== "custom";
   el("customEdgeInput").value = String(state.customEdge);
 
-  el("stripExifToggle").checked = state.stripExif;
-  el("repairDateRow").hidden = state.stripExif;
+  document.querySelectorAll("#exifPrivacyChips .choice-chip").forEach((chip) => {
+    chip.classList.toggle("active", chip.dataset.exifMode === state.exifPrivacyMode);
+  });
+  el("repairDateRow").hidden = state.exifPrivacyMode === "strip_all";
   el("repairDatesToggle").checked = state.repairFilenameDates;
   el("srgbToggle").checked = state.normalizeSrgb;
 
   // Studio Enhancements
   el("cutoutToggle").checked = state.removeBackground;
+  el("deskewToggle").checked = state.autoDeskew;
+
+  document.querySelectorAll("#toneChips .choice-chip").forEach((chip) => {
+    const k = chip.dataset.tone;
+    const on =
+      (k === "sharpen" && state.postSharpen) ||
+      (k === "levels" && state.autoLevels) ||
+      (k === "grayscale" && state.grayscale);
+    chip.classList.toggle("active", on);
+  });
+
+  document.querySelectorAll("#redactTargetChips .choice-chip").forEach((chip) => {
+    const k = chip.dataset.redact;
+    chip.classList.toggle("active", k === "faces" ? state.redactFaces : state.redactText);
+  });
+  document.querySelectorAll("#redactStyleChips .choice-chip").forEach((chip) => {
+    chip.classList.toggle("active", chip.dataset.rstyle === state.redactStyle);
+  });
+  el("customRedactBoxesHint").textContent =
+    state.redactBoxCount > 0
+      ? `${state.redactBoxCount} custom redaction box${state.redactBoxCount === 1 ? "" : "es"} active from Loupe.`
+      : "Tip: Open the Before/After Loupe to drag custom redaction boxes.";
+
   document.querySelectorAll("#aspectChips .choice-chip").forEach((chip) => {
     chip.classList.toggle("active", chip.dataset.aspect === state.aspectRatio);
   });
@@ -155,11 +210,20 @@ function syncSettingsControls() {
   });
 
   el("watermarkTextInput").value = state.watermarkText;
-  el("watermarkExtraWrap").hidden = !state.watermarkText.trim();
+  const hasAnyWatermark = Boolean(state.watermarkText.trim() || state.watermarkLogoFile);
+  el("watermarkExtraWrap").hidden = !hasAnyWatermark;
+  el("watermarkTiledRow").hidden = !hasAnyWatermark;
   el("watermarkPosSelect").value = state.watermarkPosition;
   el("watermarkOpacitySlider").value = String(state.watermarkOpacity);
   el("wmOpacityLabel").textContent = `${state.watermarkOpacity}%`;
+  el("watermarkTiledToggle").checked = state.watermarkTiled;
+  el("logoFilenameLabel").textContent = state.watermarkLogoFile
+    ? state.watermarkLogoFile.name
+    : "No logo selected";
+  el("clearLogoBtn").hidden = !state.watermarkLogoFile;
 
+  el("exifArtistInput").value = state.exifArtist;
+  el("exifCopyrightInput").value = state.exifCopyright;
   el("renamePatternInput").value = state.renamePattern;
 
   const enhCount = countActiveEnhancements();
@@ -181,9 +245,12 @@ function syncSettingsControls() {
 function renderQueue() {
   const list = el("queueList");
   const clearBtn = el("clearQueueBtn");
+  const dedupeBtn = el("dedupeQueueBtn");
+
   if (state.queuedFiles.length === 0) {
     list.hidden = true;
     clearBtn.hidden = true;
+    dedupeBtn.hidden = true;
     list.innerHTML = "";
     syncSettingsControls();
     return;
@@ -191,6 +258,7 @@ function renderQueue() {
 
   list.hidden = false;
   clearBtn.hidden = false;
+  dedupeBtn.hidden = state.queuedFiles.length < 2;
   list.innerHTML = state.queuedFiles
     .map(
       (file, index) => `
@@ -200,6 +268,7 @@ function renderQueue() {
           <span class="queue-size">${formatBytes(file.size)}</span>
         </div>
         <div class="header-actions">
+          <button type="button" class="ghost-btn" data-exif-index="${index}">EXIF</button>
           <button type="button" class="ghost-btn" data-loupe-index="${index}">Loupe</button>
           <button type="button" class="ghost-btn" data-remove-index="${index}" aria-label="Remove file">&times;</button>
         </div>
@@ -218,7 +287,9 @@ function renderResultRow(item, allowDelete = false) {
 
   const flags = [];
   if (item.cutout_applied) flags.push("Cutout");
+  if (item.redacted_regions > 0) flags.push(`${item.redacted_regions} redacted`);
   if (item.repaired_date) flags.push("Date repaired");
+  else if (item.exif_privacy_mode === "gps_only") flags.push("GPS scrubbed");
   else if (item.exif_kept) flags.push("EXIF kept");
   else flags.push("No EXIF");
   if (item.srgb_normalized) flags.push("sRGB");
@@ -302,6 +373,12 @@ function renderSummaryAndHistory() {
 function renderPresets() {
   el("presetsGrid").innerHTML = state.presets
     .map((p) => {
+      const exifSpec =
+        p.exif_privacy_mode === "gps_only"
+          ? "No GPS"
+          : p.strip_exif
+          ? "No EXIF"
+          : "EXIF kept";
       const specs = [
         p.output_format.toUpperCase(),
         p.target_size_kb > 0
@@ -312,7 +389,9 @@ function renderPresets() {
         describeResize(p.resize_mode, p.max_megapixels, p.max_edge_px),
         p.aspect_ratio && p.aspect_ratio !== "original" ? `${p.aspect_ratio} ${p.frame_mode}` : null,
         p.remove_background ? "Cutout" : null,
-        p.strip_exif ? "No EXIF" : "EXIF kept",
+        p.watermark_tiled ? "45° Tiled" : null,
+        p.post_sharpen ? "Sharpen" : null,
+        exifSpec,
       ]
         .filter(Boolean)
         .join(" · ");
@@ -350,12 +429,18 @@ function applyPresetObject(preset) {
   } else {
     state.compressionMode = "quality";
   }
-  state.stripExif = preset.strip_exif;
+  state.exifPrivacyMode =
+    preset.exif_privacy_mode || (preset.strip_exif ? "strip_all" : "keep_all");
   state.normalizeSrgb = preset.normalize_srgb ?? true;
   state.removeBackground = Boolean(preset.remove_background);
+  state.autoDeskew = Boolean(preset.auto_deskew);
+  state.postSharpen = Boolean(preset.post_sharpen);
+  state.autoLevels = Boolean(preset.auto_levels);
+  state.grayscale = Boolean(preset.grayscale);
   state.aspectRatio = preset.aspect_ratio || "original";
   state.frameMode = preset.frame_mode || "blur";
   state.watermarkText = preset.watermark_text || "";
+  state.watermarkTiled = Boolean(preset.watermark_tiled);
   state.renamePattern = preset.rename_pattern || "{orig}";
   state.presetSlug = preset.id;
 
@@ -377,8 +462,16 @@ function applyPresetObject(preset) {
   showToast(`Applied "${preset.name}"`);
 }
 
+const inspector = createInspectorController({ showToast });
+
 const loupe = createLoupeController({
   getOptionsPayload: currentOptionsPayload,
+  getLogoFile: () => state.watermarkLogoFile,
+  onBoxesChanged: (serialized, count) => {
+    state.redactBoxes = serialized;
+    state.redactBoxCount = count;
+    syncSettingsControls();
+  },
   showToast,
 });
 
@@ -416,6 +509,33 @@ function addFilesToQueue(fileList) {
   renderQueue();
 }
 
+async function runBurstDedupe() {
+  if (state.queuedFiles.length < 2) return;
+  const btn = el("dedupeQueueBtn");
+  btn.disabled = true;
+  btn.textContent = "Scanning dHash...";
+  try {
+    const fd = new FormData();
+    state.queuedFiles.forEach((f) => fd.append("files", f));
+    const res = await api.dedupeQueue(fd);
+    if (res.duplicates_found === 0) {
+      showToast("No near-duplicate burst photos found — all unique!");
+    } else {
+      const keepSet = new Set(res.keep_indices);
+      state.queuedFiles = state.queuedFiles.filter((_, idx) => keepSet.has(idx));
+      renderQueue();
+      showToast(
+        `Removed ${res.duplicates_found} blurry/duplicate burst shot${res.duplicates_found === 1 ? "" : "s"}`
+      );
+    }
+  } catch (err) {
+    showToast(err.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "De-dupe Burst";
+  }
+}
+
 async function runUploadConversion() {
   if (state.queuedFiles.length === 0) return;
   const btn = el("convertBtn");
@@ -426,6 +546,9 @@ async function runUploadConversion() {
     const opts = currentOptionsPayload();
     const fd = new FormData();
     state.queuedFiles.forEach((f) => fd.append("files", f));
+    if (state.watermarkLogoFile) {
+      fd.append("watermark_logo", state.watermarkLogoFile);
+    }
     Object.entries(opts).forEach(([k, v]) => fd.append(k, String(v)));
 
     const res = await api.convertFiles(fd);
@@ -507,6 +630,12 @@ function wireEvents() {
   });
 
   el("queueList").addEventListener("click", (e) => {
+    const exifBtn = e.target.closest("[data-exif-index]");
+    if (exifBtn) {
+      const f = state.queuedFiles[Number(exifBtn.dataset.exifIndex)];
+      if (f) inspector.openInspector(f);
+      return;
+    }
     const loupeBtn = e.target.closest("[data-loupe-index]");
     if (loupeBtn) {
       const f = state.queuedFiles[Number(loupeBtn.dataset.loupeIndex)];
@@ -520,8 +649,12 @@ function wireEvents() {
     }
   });
 
+  el("dedupeQueueBtn").addEventListener("click", runBurstDedupe);
   el("openSampleLoupeBtn").addEventListener("click", () => {
     loupe.openPreview(state.queuedFiles[0] || null);
+  });
+  el("openSampleInspectorBtn").addEventListener("click", () => {
+    inspector.openInspector(state.queuedFiles[0] || null);
   });
 
   el("clearQueueBtn").addEventListener("click", () => {
@@ -578,8 +711,10 @@ function wireEvents() {
     syncSettingsControls();
   });
 
-  el("stripExifToggle").addEventListener("change", (e) => {
-    state.stripExif = e.target.checked;
+  el("exifPrivacyChips").addEventListener("click", (e) => {
+    const chip = e.target.closest("[data-exif-mode]");
+    if (!chip) return;
+    state.exifPrivacyMode = chip.dataset.exifMode;
     markCustom();
     syncSettingsControls();
   });
@@ -596,6 +731,40 @@ function wireEvents() {
 
   el("cutoutToggle").addEventListener("change", (e) => {
     state.removeBackground = e.target.checked;
+    markCustom();
+    syncSettingsControls();
+  });
+
+  el("deskewToggle").addEventListener("change", (e) => {
+    state.autoDeskew = e.target.checked;
+    markCustom();
+    syncSettingsControls();
+  });
+
+  el("toneChips").addEventListener("click", (e) => {
+    const chip = e.target.closest("[data-tone]");
+    if (!chip) return;
+    const k = chip.dataset.tone;
+    if (k === "sharpen") state.postSharpen = !state.postSharpen;
+    else if (k === "levels") state.autoLevels = !state.autoLevels;
+    else if (k === "grayscale") state.grayscale = !state.grayscale;
+    markCustom();
+    syncSettingsControls();
+  });
+
+  el("redactTargetChips").addEventListener("click", (e) => {
+    const chip = e.target.closest("[data-redact]");
+    if (!chip) return;
+    if (chip.dataset.redact === "faces") state.redactFaces = !state.redactFaces;
+    else state.redactText = !state.redactText;
+    markCustom();
+    syncSettingsControls();
+  });
+
+  el("redactStyleChips").addEventListener("click", (e) => {
+    const chip = e.target.closest("[data-rstyle]");
+    if (!chip) return;
+    state.redactStyle = chip.dataset.rstyle;
     markCustom();
     syncSettingsControls();
   });
@@ -622,6 +791,22 @@ function wireEvents() {
     syncSettingsControls();
   });
 
+  const logoInput = el("watermarkLogoInput");
+  el("pickLogoBtn").addEventListener("click", () => logoInput.click());
+  logoInput.addEventListener("change", () => {
+    if (logoInput.files?.[0]) {
+      state.watermarkLogoFile = logoInput.files[0];
+      markCustom();
+      syncSettingsControls();
+    }
+    logoInput.value = "";
+  });
+  el("clearLogoBtn").addEventListener("click", () => {
+    state.watermarkLogoFile = null;
+    markCustom();
+    syncSettingsControls();
+  });
+
   el("watermarkPosSelect").addEventListener("change", (e) => {
     state.watermarkPosition = e.target.value;
     markCustom();
@@ -631,6 +816,23 @@ function wireEvents() {
     state.watermarkOpacity = Number(e.target.value);
     el("wmOpacityLabel").textContent = `${state.watermarkOpacity}%`;
     markCustom();
+  });
+
+  el("watermarkTiledToggle").addEventListener("change", (e) => {
+    state.watermarkTiled = e.target.checked;
+    markCustom();
+  });
+
+  el("exifArtistInput").addEventListener("input", (e) => {
+    state.exifArtist = e.target.value;
+    markCustom();
+    syncSettingsControls();
+  });
+
+  el("exifCopyrightInput").addEventListener("input", (e) => {
+    state.exifCopyright = e.target.value;
+    markCustom();
+    syncSettingsControls();
   });
 
   el("renamePatternInput").addEventListener("input", (e) => {
@@ -659,7 +861,13 @@ function wireEvents() {
   el("exportBatchPdfBtn").addEventListener("click", () => {
     const prefs = tools.getPdfPrefs();
     api
-      .exportHistoryPdf(state.latestBatch.map((i) => i.id), prefs.pageSize, prefs.margin, prefs.scanFilter)
+      .exportHistoryPdf(
+        state.latestBatch.map((i) => i.id),
+        prefs.pageSize,
+        prefs.margin,
+        prefs.scanFilter,
+        prefs.autoDeskew
+      )
       .catch((err) => showToast(err.message));
   });
 
@@ -670,7 +878,13 @@ function wireEvents() {
   el("exportHistoryPdfBtn").addEventListener("click", () => {
     const prefs = tools.getPdfPrefs();
     api
-      .exportHistoryPdf(state.history.map((i) => i.id), prefs.pageSize, prefs.margin, prefs.scanFilter)
+      .exportHistoryPdf(
+        state.history.map((i) => i.id),
+        prefs.pageSize,
+        prefs.margin,
+        prefs.scanFilter,
+        prefs.autoDeskew
+      )
       .catch((err) => showToast(err.message));
   });
 

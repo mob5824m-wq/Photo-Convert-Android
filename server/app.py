@@ -1,4 +1,4 @@
-"""FastAPI application for Photo Convert Web Studio, Loupe Preview, PDF Builder & Watched Folder."""
+"""FastAPI application for Photo Convert Web Studio, Loupe, EXIF Inspector, De-dupe, Collage, Animation, WebPack, PDF & Watched Folder."""
 
 from __future__ import annotations
 
@@ -13,12 +13,22 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from server.converter import build_sample_photos, convert_image_bytes, generate_loupe_preview
+from server.animation_exporter import build_animated_sequence
+from server.collage_exporter import build_collage_or_contact_sheet
+from server.converter import (
+    build_sample_photos,
+    convert_image_bytes,
+    decode_input_image,
+    generate_loupe_preview,
+)
+from server.dedupe import analyze_burst_duplicates
+from server.exif_inspector import inspect_exif_and_palette
 from server.folder_watcher import WatchedFolderManager
 from server.models import LOSSLESS_FORMATS, RAW_EXTENSIONS, SUPPORTED_FORMATS, ConvertOptions
 from server.pdf_exporter import build_pdf_from_images
 from server.store import ConvertStore
 from server.versioning import read_current_version
+from server.webpak_exporter import build_responsive_webpack
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -31,14 +41,26 @@ class ConvertPayloadMixin(BaseModel):
     max_megapixels: float = 16.0
     max_edge_px: int = 2048
     strip_exif: bool = True
+    exif_privacy_mode: str = "auto"
+    exif_artist: str = ""
+    exif_copyright: str = ""
     repair_filename_dates: bool = True
     normalize_srgb: bool = True
     remove_background: bool = False
+    auto_deskew: bool = False
+    post_sharpen: bool = False
+    auto_levels: bool = False
+    grayscale: bool = False
+    redact_faces: bool = False
+    redact_text: bool = False
+    redact_boxes: str = ""
+    redact_style: str = "blur"
     aspect_ratio: str = "original"
     frame_mode: str = "blur"
     watermark_text: str = ""
     watermark_position: str = "bottom-right"
     watermark_opacity: int = 65
+    watermark_tiled: bool = False
     rename_pattern: str = "{orig}"
     preset_slug: str = "custom"
 
@@ -51,14 +73,26 @@ class ConvertPayloadMixin(BaseModel):
             max_megapixels=self.max_megapixels,
             max_edge_px=self.max_edge_px,
             strip_exif=self.strip_exif,
+            exif_privacy_mode=self.exif_privacy_mode,  # type: ignore[arg-type]
+            exif_artist=self.exif_artist,
+            exif_copyright=self.exif_copyright,
             repair_filename_dates=self.repair_filename_dates,
             normalize_srgb=self.normalize_srgb,
             remove_background=self.remove_background,
+            auto_deskew=self.auto_deskew,
+            post_sharpen=self.post_sharpen,
+            auto_levels=self.auto_levels,
+            grayscale=self.grayscale,
+            redact_faces=self.redact_faces,
+            redact_text=self.redact_text,
+            redact_boxes=self.redact_boxes,
+            redact_style=self.redact_style,  # type: ignore[arg-type]
             aspect_ratio=self.aspect_ratio,  # type: ignore[arg-type]
             frame_mode=self.frame_mode,  # type: ignore[arg-type]
             watermark_text=self.watermark_text,
             watermark_position=self.watermark_position,  # type: ignore[arg-type]
             watermark_opacity=self.watermark_opacity,
+            watermark_tiled=self.watermark_tiled,
             rename_pattern=self.rename_pattern,
             preset_slug=self.preset_slug,
         ).normalized()
@@ -88,6 +122,7 @@ class PdfHistoryPayload(BaseModel):
     page_size: str = "a4"
     margin: str = "small"
     document_scan_filter: bool = False
+    auto_deskew: bool = False
 
 
 def create_app(
@@ -149,12 +184,18 @@ def create_app(
             max_megapixels=opts.max_megapixels,
             max_edge_px=opts.max_edge_px,
             strip_exif=opts.strip_exif,
+            exif_privacy_mode=opts.exif_privacy_mode,
             target_size_kb=opts.target_size_kb,
             normalize_srgb=opts.normalize_srgb,
             remove_background=opts.remove_background,
+            auto_deskew=opts.auto_deskew,
+            post_sharpen=opts.post_sharpen,
+            auto_levels=opts.auto_levels,
+            grayscale=opts.grayscale,
             aspect_ratio=opts.aspect_ratio,
             frame_mode=opts.frame_mode,
             watermark_text=opts.watermark_text,
+            watermark_tiled=opts.watermark_tiled,
             rename_pattern=opts.rename_pattern,
         )
         return {"preset": preset}
@@ -168,6 +209,7 @@ def create_app(
     @app.post("/api/convert")
     async def convert_uploads(
         files: Annotated[list[UploadFile], File(...)],
+        watermark_logo: Annotated[UploadFile | None, File()] = None,
         output_format: Annotated[str, Form()] = "webp",
         quality: Annotated[int, Form()] = 85,
         target_size_kb: Annotated[int, Form()] = 0,
@@ -175,19 +217,32 @@ def create_app(
         max_megapixels: Annotated[float, Form()] = 16.0,
         max_edge_px: Annotated[int, Form()] = 2048,
         strip_exif: Annotated[bool, Form()] = True,
+        exif_privacy_mode: Annotated[str, Form()] = "auto",
+        exif_artist: Annotated[str, Form()] = "",
+        exif_copyright: Annotated[str, Form()] = "",
         repair_filename_dates: Annotated[bool, Form()] = True,
         normalize_srgb: Annotated[bool, Form()] = True,
         remove_background: Annotated[bool, Form()] = False,
+        auto_deskew: Annotated[bool, Form()] = False,
+        post_sharpen: Annotated[bool, Form()] = False,
+        auto_levels: Annotated[bool, Form()] = False,
+        grayscale: Annotated[bool, Form()] = False,
+        redact_faces: Annotated[bool, Form()] = False,
+        redact_text: Annotated[bool, Form()] = False,
+        redact_boxes: Annotated[str, Form()] = "",
+        redact_style: Annotated[str, Form()] = "blur",
         aspect_ratio: Annotated[str, Form()] = "original",
         frame_mode: Annotated[str, Form()] = "blur",
         watermark_text: Annotated[str, Form()] = "",
         watermark_position: Annotated[str, Form()] = "bottom-right",
         watermark_opacity: Annotated[int, Form()] = 65,
+        watermark_tiled: Annotated[bool, Form()] = False,
         rename_pattern: Annotated[str, Form()] = "{orig}",
         preset_slug: Annotated[str, Form()] = "custom",
     ) -> dict:
         if not files:
             raise HTTPException(status_code=400, detail="Select at least one image.")
+        logo_bytes = await watermark_logo.read() if watermark_logo is not None else None
         try:
             opts = ConvertOptions(
                 output_format=output_format,  # type: ignore[arg-type]
@@ -197,14 +252,27 @@ def create_app(
                 max_megapixels=max_megapixels,
                 max_edge_px=max_edge_px,
                 strip_exif=strip_exif,
+                exif_privacy_mode=exif_privacy_mode,  # type: ignore[arg-type]
+                exif_artist=exif_artist,
+                exif_copyright=exif_copyright,
                 repair_filename_dates=repair_filename_dates,
                 normalize_srgb=normalize_srgb,
                 remove_background=remove_background,
+                auto_deskew=auto_deskew,
+                post_sharpen=post_sharpen,
+                auto_levels=auto_levels,
+                grayscale=grayscale,
+                redact_faces=redact_faces,
+                redact_text=redact_text,
+                redact_boxes=redact_boxes,
+                redact_style=redact_style,  # type: ignore[arg-type]
                 aspect_ratio=aspect_ratio,  # type: ignore[arg-type]
                 frame_mode=frame_mode,  # type: ignore[arg-type]
                 watermark_text=watermark_text,
                 watermark_position=watermark_position,  # type: ignore[arg-type]
                 watermark_opacity=watermark_opacity,
+                watermark_tiled=watermark_tiled,
+                watermark_logo_bytes=logo_bytes if logo_bytes else None,
                 rename_pattern=rename_pattern,
                 preset_slug=preset_slug,
             ).normalized()
@@ -234,6 +302,7 @@ def create_app(
     @app.post("/api/preview")
     async def preview_before_after(
         file: Annotated[UploadFile | None, File()] = None,
+        watermark_logo: Annotated[UploadFile | None, File()] = None,
         sample_only: Annotated[bool, Form()] = False,
         output_format: Annotated[str, Form()] = "webp",
         quality: Annotated[int, Form()] = 85,
@@ -242,14 +311,26 @@ def create_app(
         max_megapixels: Annotated[float, Form()] = 16.0,
         max_edge_px: Annotated[int, Form()] = 2048,
         strip_exif: Annotated[bool, Form()] = True,
+        exif_privacy_mode: Annotated[str, Form()] = "auto",
+        exif_artist: Annotated[str, Form()] = "",
+        exif_copyright: Annotated[str, Form()] = "",
         repair_filename_dates: Annotated[bool, Form()] = True,
         normalize_srgb: Annotated[bool, Form()] = True,
         remove_background: Annotated[bool, Form()] = False,
+        auto_deskew: Annotated[bool, Form()] = False,
+        post_sharpen: Annotated[bool, Form()] = False,
+        auto_levels: Annotated[bool, Form()] = False,
+        grayscale: Annotated[bool, Form()] = False,
+        redact_faces: Annotated[bool, Form()] = False,
+        redact_text: Annotated[bool, Form()] = False,
+        redact_boxes: Annotated[str, Form()] = "",
+        redact_style: Annotated[str, Form()] = "blur",
         aspect_ratio: Annotated[str, Form()] = "original",
         frame_mode: Annotated[str, Form()] = "blur",
         watermark_text: Annotated[str, Form()] = "",
         watermark_position: Annotated[str, Form()] = "bottom-right",
         watermark_opacity: Annotated[int, Form()] = 65,
+        watermark_tiled: Annotated[bool, Form()] = False,
     ) -> dict:
         if file is not None:
             raw = await file.read()
@@ -259,6 +340,7 @@ def create_app(
         else:
             raise HTTPException(status_code=400, detail="Provide a photo or set sample_only=true.")
 
+        logo_bytes = await watermark_logo.read() if watermark_logo is not None else None
         try:
             opts = ConvertOptions(
                 output_format=output_format,  # type: ignore[arg-type]
@@ -268,16 +350,65 @@ def create_app(
                 max_megapixels=max_megapixels,
                 max_edge_px=max_edge_px,
                 strip_exif=strip_exif,
+                exif_privacy_mode=exif_privacy_mode,  # type: ignore[arg-type]
+                exif_artist=exif_artist,
+                exif_copyright=exif_copyright,
                 repair_filename_dates=repair_filename_dates,
                 normalize_srgb=normalize_srgb,
                 remove_background=remove_background,
+                auto_deskew=auto_deskew,
+                post_sharpen=post_sharpen,
+                auto_levels=auto_levels,
+                grayscale=grayscale,
+                redact_faces=redact_faces,
+                redact_text=redact_text,
+                redact_boxes=redact_boxes,
+                redact_style=redact_style,  # type: ignore[arg-type]
                 aspect_ratio=aspect_ratio,  # type: ignore[arg-type]
                 frame_mode=frame_mode,  # type: ignore[arg-type]
                 watermark_text=watermark_text,
                 watermark_position=watermark_position,  # type: ignore[arg-type]
                 watermark_opacity=watermark_opacity,
+                watermark_tiled=watermark_tiled,
+                watermark_logo_bytes=logo_bytes if logo_bytes else None,
             ).normalized()
             return generate_loupe_preview(raw, fname, opts)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/inspect-exif")
+    async def inspect_photo_exif(
+        file: Annotated[UploadFile | None, File()] = None,
+        sample_only: Annotated[bool, Form()] = False,
+    ) -> dict:
+        if file is not None:
+            raw = await file.read()
+            fname = file.filename or "photo.jpg"
+        elif sample_only:
+            fname, raw = build_sample_photos()[0]
+        else:
+            raise HTTPException(status_code=400, detail="Provide a photo to inspect.")
+
+        try:
+            decoded, orig_format, raw_exif = decode_input_image(raw, fname)
+            return inspect_exif_and_palette(decoded, orig_format, raw_exif, fname, len(raw))
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/dedupe")
+    async def dedupe_burst_uploads(
+        files: Annotated[list[UploadFile], File(...)],
+        max_hamming: Annotated[int, Form()] = 10,
+    ) -> dict:
+        if len(files) < 2:
+            raise HTTPException(status_code=400, detail="Provide at least 2 photos to de-duplicate.")
+        payload_items: list[tuple[int, str, bytes]] = []
+        for idx, up in enumerate(files):
+            raw = await up.read()
+            if raw:
+                payload_items.append((idx, up.filename or f"photo_{idx}.jpg", raw))
+        try:
+            return analyze_burst_duplicates(payload_items, max_hamming=max(1, min(24, max_hamming)))
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -305,6 +436,7 @@ def create_app(
         page_size: Annotated[str, Form()] = "a4",
         margin: Annotated[str, Form()] = "small",
         document_scan_filter: Annotated[bool, Form()] = False,
+        auto_deskew: Annotated[bool, Form()] = False,
     ) -> Response:
         if not files:
             raise HTTPException(status_code=400, detail="Select at least one image for PDF export.")
@@ -319,6 +451,7 @@ def create_app(
                 page_size=page_size,
                 margin=margin,
                 document_scan_filter=document_scan_filter,
+                auto_deskew=auto_deskew,
             )
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -348,11 +481,118 @@ def create_app(
             page_size=payload.page_size,
             margin=payload.margin,
             document_scan_filter=payload.document_scan_filter,
+            auto_deskew=payload.auto_deskew,
         )
         return Response(
             content=pdf_bytes,
             media_type="application/pdf",
             headers={"Content-Disposition": 'attachment; filename="PhotoConvert_Batch.pdf"'},
+        )
+
+    @app.post("/api/export-collage")
+    async def export_collage_endpoint(
+        files: Annotated[list[UploadFile], File(...)],
+        layout: Annotated[str, Form()] = "2x2",
+        output_format: Annotated[str, Form()] = "jpeg",
+        show_captions: Annotated[bool, Form()] = False,
+        background: Annotated[str, Form()] = "white",
+    ) -> Response:
+        if not files:
+            raise HTTPException(status_code=400, detail="Select at least one image.")
+        items: list[tuple[str, bytes]] = []
+        for up in files:
+            raw = await up.read()
+            if raw:
+                items.append((up.filename or "photo.jpg", raw))
+        try:
+            out_bytes, mime, out_name = build_collage_or_contact_sheet(
+                items,
+                layout=layout,
+                output_format=output_format,
+                show_captions=show_captions,
+                background=background,
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return Response(
+            content=out_bytes,
+            media_type=mime,
+            headers={"Content-Disposition": f'attachment; filename="{out_name}"'},
+        )
+
+    @app.post("/api/export-animation")
+    async def export_animation_endpoint(
+        files: Annotated[list[UploadFile], File(...)],
+        output_format: Annotated[str, Form()] = "webp",
+        frame_ms: Annotated[int, Form()] = 240,
+        boomerang: Annotated[bool, Form()] = False,
+        max_edge_px: Annotated[int, Form()] = 960,
+    ) -> Response:
+        if len(files) < 2:
+            raise HTTPException(status_code=400, detail="Select at least 2 photos for animation.")
+        items: list[tuple[str, bytes]] = []
+        for up in files:
+            raw = await up.read()
+            if raw:
+                items.append((up.filename or "frame.jpg", raw))
+        try:
+            out_bytes, mime, out_name = build_animated_sequence(
+                items,
+                output_format=output_format,
+                frame_ms=frame_ms,
+                boomerang=boomerang,
+                max_edge_px=max_edge_px,
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return Response(
+            content=out_bytes,
+            media_type=mime,
+            headers={"Content-Disposition": f'attachment; filename="{out_name}"'},
+        )
+
+    @app.post("/api/export-webpack/preview")
+    async def preview_webpack_endpoint(
+        file: Annotated[UploadFile | None, File()] = None,
+        sample_only: Annotated[bool, Form()] = False,
+        quality: Annotated[int, Form()] = 82,
+    ) -> dict:
+        if file is not None:
+            raw = await file.read()
+            fname = file.filename or "hero.jpg"
+        elif sample_only:
+            fname, raw = build_sample_photos()[0]
+        else:
+            raise HTTPException(status_code=400, detail="Provide an image for Web Pack preview.")
+        try:
+            _, manifest = build_responsive_webpack(raw, fname, quality=quality)
+            return manifest
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/export-webpack")
+    async def export_webpack_endpoint(
+        file: Annotated[UploadFile | None, File()] = None,
+        sample_only: Annotated[bool, Form()] = False,
+        quality: Annotated[int, Form()] = 82,
+    ) -> Response:
+        if file is not None:
+            raw = await file.read()
+            fname = file.filename or "hero.jpg"
+        elif sample_only:
+            fname, raw = build_sample_photos()[0]
+        else:
+            raise HTTPException(status_code=400, detail="Provide an image for Web Pack export.")
+        try:
+            zip_bytes, manifest = build_responsive_webpack(raw, fname, quality=quality)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return Response(
+            content=zip_bytes,
+            media_type="application/zip",
+            headers={
+                "Content-Disposition": f'attachment; filename="{manifest["name"]}-webpack.zip"'
+            },
         )
 
     @app.get("/api/watcher")

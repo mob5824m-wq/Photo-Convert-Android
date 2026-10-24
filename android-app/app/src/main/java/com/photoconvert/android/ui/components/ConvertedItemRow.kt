@@ -61,8 +61,10 @@ fun ConvertedItemRow(
                 overflow = TextOverflow.Ellipsis
             )
             val tags = buildList {
+                if (item.redactedRegions > 0) add("Redacted (${item.redactedRegions})")
                 if (item.cutoutApplied) add("Cutout")
                 if (item.repairedDate) add("Date repaired")
+                else if (item.exifPrivacyMode == "gps_only") add("GPS scrubbed")
                 else if (item.exifKept) add("EXIF kept")
                 else add("No EXIF")
             }.joinToString(" · ")

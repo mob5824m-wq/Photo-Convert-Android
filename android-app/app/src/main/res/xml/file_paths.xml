@@ -2,5 +2,6 @@
 <paths>
     <files-path name="converted_photos" path="converted/" />
     <files-path name="exported_pdfs" path="pdfs/" />
+    <files-path name="exported_bundles" path="exports/" />
     <cache-path name="shared_cache" path="." />
 </paths>
