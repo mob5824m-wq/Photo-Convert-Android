@@ -14,5 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "PhotoConvertAndroid"
+rootProject.name = "PixelPhotoNAS"
 include(":app")

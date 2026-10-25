@@ -1,9 +1,9 @@
 [project]
-name = "photo-convert-android"
+name = "pixel-photo-nas"
 version = "1.0.0"
-description = "Clean, privacy-first Android Photo Converter & Web Studio"
-requires-python = ">=3.11"
+description = "Google Pixel 1–5 Photo NAS & Google Photos Storage Saver Converter"
+requires-python = ">=3.10"
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
 pythonpath = ["."]
+testpaths = ["tests"]
