@@ -1,0 +1,129 @@
+name: Build Photo Convert Android APK & Test Suite
+
+on:
+  push:
+    branches:
+      - main
+      - "arena/**"
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: photo-convert-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  test-engine:
+    name: Python Conversion Engine & API Tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+      - run: pip install -r requirements.txt
+      - run: pytest -v
+
+  build-android-apk:
+    name: Build Signed Android APK & Release
+    needs: test-engine
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Resolve Rollover Version
+        id: ver
+        run: |
+          git fetch --tags --force
+          python3 -m server.versioning --github-output "$GITHUB_OUTPUT"
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: "temurin"
+          java-version: "17"
+
+      - name: Set up Gradle 8.7
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.7"
+
+      - name: Verify Release Keystore
+        run: |
+          keytool -list \
+            -keystore android-app/keystore/photoconvert-release.p12 \
+            -storetype PKCS12 \
+            -storepass photoconvert2026
+
+      - name: Run Unit Tests & Build Signed APKs
+        working-directory: android-app
+        run: |
+          set -o pipefail
+          if ! gradle testDebugUnitTest assembleDebug assembleRelease \
+            -PappVersionName="${{ steps.ver.outputs.version }}" \
+            -PappVersionCode="${{ steps.ver.outputs.version_code }}" \
+            --no-daemon > "$RUNNER_TEMP/gradle.log" 2>&1; then
+            cat "$RUNNER_TEMP/gradle.log"
+            ERR_SUMMARY=$(grep -E "(^e: |FAILURE:|What went wrong:|^\* |> Task .* FAILED|Caused by:|Error:)" "$RUNNER_TEMP/gradle.log" | tail -n 25 | tr '\n' ' | ')
+            echo "::error title=Gradle Build Failure::$ERR_SUMMARY"
+            exit 1
+          fi
+          cat "$RUNNER_TEMP/gradle.log" | tail -n 25
+
+      - name: Package Versioned APKs
+        run: |
+          mkdir -p dist-apk
+          VER="${{ steps.ver.outputs.version }}"
+          cp android-app/app/build/outputs/apk/release/app-release.apk "dist-apk/PhotoConvert-v${VER}-Signed.apk"
+          cp android-app/app/build/outputs/apk/debug/app-debug.apk "dist-apk/PhotoConvert-v${VER}-Debug.apk"
+          ls -lh dist-apk/
+
+      - name: Upload APK Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: PhotoConvert-Android-APKs
+          path: dist-apk/*.apk
+          retention-days: 90
+
+      - name: Publish Tagged Release on Merge to main
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.ver.outputs.tag }}"
+          VER="${{ steps.ver.outputs.version }}"
+          CODE="${{ steps.ver.outputs.version_code }}"
+
+          echo "${VER}" > VERSION
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          if ! git diff --quiet VERSION; then
+            git add VERSION
+            git commit -m "chore(release): ${TAG} (versionCode ${CODE}) [skip ci]"
+            git push origin HEAD:main || git reset --hard HEAD~1
+          fi
+
+          git tag -a "${TAG}" -m "Photo Convert Android ${TAG}"
+          git push origin "${TAG}"
+
+          gh release create "${TAG}" dist-apk/*.apk \
+            --title "Photo Convert Android ${TAG}" \
+            --notes "Signed installable Android release **${TAG}** (\`versionCode ${CODE}\`)." \
+            --generate-notes
