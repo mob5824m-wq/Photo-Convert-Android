@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="theme-color" content="#2563eb" />
-  <title>Photo Convert — Clean Batch Image Studio</title>
+  <meta name="theme-color" content="#1a73e8" />
+  <title>Pixel Photo NAS — Android Unlimited Google Photos Relay</title>
   <link rel="icon" type="image/png" href="/favicon.png" />
   <link rel="manifest" href="/manifest.json" />
   <link rel="stylesheet" href="/styles.css" />
@@ -13,33 +13,52 @@
   <header class="topbar">
     <div class="topbar-inner">
       <div class="brand">
-        <div class="brand-mark" aria-hidden="true">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
-            <rect x="3" y="3" width="18" height="18" rx="5"></rect>
-            <circle cx="8.5" cy="8.5" r="1.5"></circle>
-            <path d="M21 15l-5-5L5 21"></path>
-          </svg>
-        </div>
-        <div>
-          <span class="brand-name">Photo Convert</span>
-          <span class="version-tag" id="versionTag">v1.0.0</span>
+        <img
+          src="/app-icon.png"
+          alt="Pixel Photo NAS App Icon"
+          class="brand-app-icon"
+          width="46"
+          height="46"
+        />
+        <img
+          src="/logo.png"
+          alt="Pixel Photo NAS — Home Photo &amp; Samba Server"
+          class="brand-wordmark"
+          width="210"
+          height="70"
+        />
+        <div class="brand-meta">
+          <div class="brand-title-row">
+            <h1 class="brand-title sr-only">Pixel Photo NAS</h1>
+            <span class="status-pill" id="engineStatusPill">
+              <span class="status-dot"></span>
+              <span id="engineStatusText">Online · Watching</span>
+            </span>
+          </div>
+          <p class="brand-subtitle" id="profileSubtitle">Google Pixel 1–5 Unlimited Google Photos Relay &amp; Storage Saver Engine</p>
         </div>
       </div>
 
-      <nav class="segmented-tabs" role="tablist" aria-label="Primary sections">
-        <button class="seg-tab active" data-tab="convert" role="tab" aria-selected="true">Convert</button>
-        <button class="seg-tab" data-tab="tools" role="tab" aria-selected="false">PDF &amp; Tools</button>
-        <button class="seg-tab" data-tab="presets" role="tab" aria-selected="false">Presets</button>
-        <button class="seg-tab" data-tab="history" role="tab" aria-selected="false">
-          History
-          <span class="tab-count" id="historyCountPill">0</span>
+      <div class="topbar-controls">
+        <label class="profile-select-wrap" for="deviceProfileSelect">
+          <span class="sr-only">Target Pixel Model</span>
+          <select id="deviceProfileSelect" class="profile-select" title="Select your Pixel hardware generation">
+            <option value="pixel_1">Pixel 1 / XL — Unlimited Original</option>
+            <option value="pixel_2">Pixel 2 / 2 XL — Unlimited Saver</option>
+            <option value="pixel_3">Pixel 3 / 3a — Unlimited Saver</option>
+            <option value="pixel_4">Pixel 4 / 4a — Unlimited Saver</option>
+            <option value="pixel_5" selected>Pixel 4a 5G / Pixel 5 — Unlimited Saver</option>
+          </select>
+        </label>
+        <button class="icon-btn" id="refreshBtn" title="Refresh status &amp; folders" aria-label="Refresh">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="23 4 23 10 17 10"></polyline>
+            <polyline points="1 20 1 14 7 14"></polyline>
+            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+          </svg>
         </button>
-      </nav>
-
-      <div class="topbar-end">
-        <span class="saved-pill" id="lifetimeSavedPill" title="Total storage saved">0 B saved</span>
-        <button class="icon-button" id="themeToggleBtn" aria-label="Toggle color theme" title="Toggle light/dark mode">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <button class="icon-btn" id="themeToggleBtn" title="Switch light/dark theme" aria-label="Toggle theme">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
           </svg>
         </button>
@@ -47,608 +66,578 @@
     </div>
   </header>
 
-  <main class="shell">
-    <!-- TAB 1: CONVERT -->
-    <section class="panel active" id="panel-convert" role="tabpanel">
-      <div class="convert-grid">
-        <!-- Left: Dropzone & Selected Queue -->
-        <div class="surface-card drop-card">
-          <div class="card-header">
+  <main class="container">
+    <!-- Live 3-Stage Folder Pipeline Banner -->
+    <section class="pipeline-strip" aria-label="Live Photo Pipeline">
+      <div class="pipeline-node">
+        <div class="node-header">
+          <span class="node-step">FOLDER 1 · UPLOAD INBOX</span>
+          <span class="badge badge-neutral" id="nomediaBadge">.nomedia shielded</span>
+        </div>
+        <div class="node-metric-row">
+          <strong class="node-count" id="incomingCountMetric">0 files</strong>
+          <span class="node-bytes" id="incomingBytesMetric">0 B waiting</span>
+        </div>
+        <code class="node-path" id="incomingPathText">.../Incoming</code>
+      </div>
+
+      <div class="pipeline-connector" aria-hidden="true">
+        <div class="connector-arrow" id="connectorAnim">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="5" y1="12" x2="19" y2="12"></line>
+            <polyline points="12 5 19 12 12 19"></polyline>
+          </svg>
+        </div>
+      </div>
+
+      <div class="pipeline-node pipeline-node-engine">
+        <div class="node-header">
+          <span class="node-step">CONVERTER &amp; PROFILE ROUTER</span>
+          <span class="badge badge-accent" id="modeBadge">Storage Saver ON</span>
+        </div>
+        <div class="node-engine-desc" id="engineSummaryLine">
+          ≤16 MP JPEG (85%) · 1080p MP4 · Folder Profiles + Quarantine Guard
+        </div>
+        <div class="active-job-bar" id="activeJobBar" hidden>
+          <span class="spinner"></span>
+          <span id="activeJobText">Converting...</span>
+        </div>
+      </div>
+
+      <div class="pipeline-connector" aria-hidden="true">
+        <div class="connector-arrow">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="5" y1="12" x2="19" y2="12"></line>
+            <polyline points="12 5 19 12 12 19"></polyline>
+          </svg>
+        </div>
+      </div>
+
+      <div class="pipeline-node">
+        <div class="node-header">
+          <span class="node-step">FOLDER 2 · GOOGLE PHOTOS OUT</span>
+          <span class="badge badge-success" id="savedPctBadge">0% saved</span>
+        </div>
+        <div class="node-metric-row">
+          <strong class="node-count" id="outputCountMetric">0 files</strong>
+          <span class="node-bytes" id="totalSavedMetric">0 B space freed</span>
+        </div>
+        <code class="node-path" id="outputPathText">.../DCIM/PixelNAS</code>
+      </div>
+    </section>
+
+    <!-- Navigation Tabs -->
+    <nav class="tabs-bar" role="tablist">
+      <button class="tab-btn active" data-tab="overview" role="tab" aria-selected="true">
+        Pipeline &amp; Profiles
+      </button>
+      <button class="tab-btn" data-tab="gallery" role="tab" aria-selected="false">
+        Media Gallery &amp; EXIF
+        <span class="tab-counter" id="galleryTabCount">0</span>
+      </button>
+      <button class="tab-btn" data-tab="quarantine" role="tab" aria-selected="false">
+        Quarantine
+        <span class="tab-counter" id="quarantineTabCount">0</span>
+      </button>
+      <button class="tab-btn" data-tab="network" role="tab" aria-selected="false">
+        Android Widget &amp; NAS Mounts
+      </button>
+      <button class="tab-btn" data-tab="settings" role="tab" aria-selected="false">
+        Settings
+      </button>
+    </nav>
+
+    <!-- TAB 1: OVERVIEW / UPLOAD / PER-FOLDER PROFILES / FOLDERS / LEDGER -->
+    <section class="tab-panel active" id="tab-overview">
+      <div class="grid-two">
+        <!-- Upload Card -->
+        <div class="card">
+          <div class="card-head">
             <div>
-              <h2>Photos</h2>
-              <p class="subtext">Drop JPG, PNG, WebP, AVIF, HEIC, TIFF, BMP, or RAW (DNG/CR2/NEF/ARW).</p>
-            </div>
-            <div class="header-actions">
-              <button class="secondary-btn compact-btn" id="dedupeQueueBtn" hidden title="Detect near-identical burst photos via dHash + sharpness">De-dupe Burst</button>
-              <button class="ghost-btn" id="clearQueueBtn" hidden>Clear queue</button>
+              <h2>Upload Photos &amp; Videos to Incoming</h2>
+              <p class="muted">Upload from Browser, Android Home Screen Widget, Share Sheet, WebDAV, FTP, or Syncthing.</p>
             </div>
           </div>
 
-          <div class="dropzone" id="dropzone" tabindex="0" role="button" aria-label="Select photos to convert">
-            <input type="file" id="fileInput" multiple accept="image/*,.heic,.heif,.avif,.dng,.cr2,.cr3,.nef,.arw,.orf,.rw2" hidden />
-            <div class="dropzone-glyph">
-              <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+          <div class="upload-profile-bar">
+            <label for="uploadProfileSelect">Target Folder Profile:</label>
+            <select id="uploadProfileSelect" class="profile-select">
+              <option value="">Global Default (/Incoming)</option>
+              <option value="StorageSaver">StorageSaver (/Incoming/StorageSaver → ≤16 MP)</option>
+              <option value="Original">Original (/Incoming/Original → 100% Untouched)</option>
+              <option value="Family">Family (/Incoming/Family → Output/Family)</option>
+            </select>
+          </div>
+
+          <div class="dropzone" id="uploadDropzone" tabindex="0" role="button" aria-label="Upload photos or videos">
+            <input type="file" id="fileInput" multiple accept="image/*,video/*,.heic,.heif,.avif,.mkv" hidden />
+            <div class="dropzone-icon">
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
                 <polyline points="17 8 12 3 7 8"></polyline>
                 <line x1="12" y1="3" x2="12" y2="15"></line>
               </svg>
             </div>
-            <p class="dropzone-headline">Drop photos here or <span>browse device</span></p>
-            <p class="dropzone-caption">Inspect EXIF/palette, de-dupe bursts, or open the Before/After Loupe</p>
+            <p class="dropzone-title">Drag &amp; drop high-res Android camera photos/videos or <span class="linkish">browse files</span></p>
+            <p class="dropzone-hint">Supports 50MP–200MP JPG, PNG, HEIC, AVIF, WebP, TIFF &amp; 4K MP4/MOV/MKV</p>
           </div>
 
-          <div class="queue-list" id="queueList" hidden></div>
-
-          <div class="sample-bar">
-            <div class="header-actions">
-              <button class="text-action" id="openSampleLoupeBtn" type="button">Before/After Loupe</button>
-              <span class="subtext">&middot;</span>
-              <button class="text-action" id="openSampleInspectorBtn" type="button">Inspect Sample EXIF</button>
+          <div class="upload-progress" id="uploadProgressWrap" hidden>
+            <div class="progress-track">
+              <div class="progress-fill" id="uploadProgressFill" style="width: 0%"></div>
             </div>
-            <button class="text-action" id="runSampleBtn" type="button">Convert 3 sample photos &rarr;</button>
+            <span class="progress-label" id="uploadProgressLabel">Uploading...</span>
+          </div>
+
+          <div class="demo-actions">
+            <div class="demo-actions-text">
+              <strong>Test Android Per-Folder Profiles + Smart EXIF + Quarantine right now:</strong>
+              <span>Drops 50MP Pixel 9 Pro (<code>StorageSaver/</code>), 24MP Galaxy S24 Ultra (<code>Original/</code>), WhatsApp image (<code>Family/</code>), 50MP Takeout + JSON &amp; 4K clip</span>
+            </div>
+            <div class="demo-btn-group">
+              <button class="btn btn-secondary" id="seedPhotosBtn">Drop Android Photos</button>
+              <button class="btn btn-primary" id="seedAllBtn">Drop Photos + Takeout + 4K Video</button>
+              <button class="btn btn-danger btn-sm" id="seedCorruptBtn" title="Simulate a half-finished/corrupted Wi-Fi upload to test automatic Quarantine isolation">Simulate Corrupted Transfer</button>
+            </div>
           </div>
         </div>
 
-        <!-- Right: Clean Conversion Controls -->
-        <div class="surface-card settings-card">
-          <div class="card-header">
+        <!-- Instant Pipeline Switches Card -->
+        <div class="card">
+          <div class="card-head">
             <div>
-              <h2>Output Settings</h2>
-              <p class="subtext" id="activePresetLabel">Custom configuration</p>
+              <h2>Conversion &amp; Cleanup Controls</h2>
+              <p class="muted" id="pixelEntitlementNote">Pixel 2–5 get unlimited free Google Photos Storage Saver backups.</p>
             </div>
           </div>
 
-          <div class="field-group">
-            <label class="field-label">Format</label>
-            <div class="chip-row" id="formatChips">
-              <button type="button" class="choice-chip active" data-format="webp">WebP</button>
-              <button type="button" class="choice-chip" data-format="jpeg">JPEG</button>
-              <button type="button" class="choice-chip" data-format="avif">AVIF</button>
-              <button type="button" class="choice-chip" data-format="heic">HEIC</button>
-              <button type="button" class="choice-chip" data-format="png">PNG</button>
-              <button type="button" class="choice-chip" data-format="tiff">TIFF</button>
-              <button type="button" class="choice-chip" data-format="bmp">BMP</button>
-            </div>
-          </div>
-
-          <!-- Compression Mode: Quality % vs Exact Target File Size -->
-          <div class="field-group">
-            <div class="field-row">
-              <div class="mini-seg" id="compressionModeTabs">
-                <button type="button" class="mini-seg-btn active" data-cmode="quality">Quality %</button>
-                <button type="button" class="mini-seg-btn" data-cmode="target">Fit Target KB</button>
+          <div class="toggle-list">
+            <label class="toggle-row" for="toggleStorageSaver">
+              <div class="toggle-copy">
+                <span class="toggle-title">Global Default: Convert to Storage Saver Quality</span>
+                <span class="toggle-sub">Downscale photos &gt;16 MP to 16 MP JPEG (85%) with 100% EXIF Date &amp; GPS kept. Per-Folder Profiles override this per subfolder.</span>
               </div>
-              <span class="value-badge" id="qualityBadge">85%</span>
-            </div>
-
-            <div id="qualityModeWrap">
-              <input type="range" id="qualitySlider" min="10" max="100" value="85" class="range-slider" />
-            </div>
-
-            <div id="targetSizeWrap" hidden>
-              <div class="chip-row" id="targetSizeChips" style="margin-bottom:8px">
-                <button type="button" class="choice-chip" data-kb="200">200 KB</button>
-                <button type="button" class="choice-chip active" data-kb="500">500 KB</button>
-                <button type="button" class="choice-chip" data-kb="1024">1 MB</button>
-                <button type="button" class="choice-chip" data-kb="2048">2 MB</button>
-              </div>
-              <div class="custom-edge-wrap">
-                <label for="targetKbInput" class="subtext">Exact ceiling (KB)</label>
-                <input type="number" id="targetKbInput" min="20" max="51200" value="500" class="text-input compact-input" />
-              </div>
-            </div>
-          </div>
-
-          <div class="field-group">
-            <label class="field-label">Dimensions</label>
-            <div class="chip-row" id="resizeChips">
-              <button type="button" class="choice-chip active" data-resize="original">Original</button>
-              <button type="button" class="choice-chip" data-resize="mp16">16 MP</button>
-              <button type="button" class="choice-chip" data-resize="edge3840">4K</button>
-              <button type="button" class="choice-chip" data-resize="edge1920">1080p</button>
-              <button type="button" class="choice-chip" data-resize="custom">Custom</button>
-            </div>
-            <div class="custom-edge-wrap" id="customEdgeWrap" hidden>
-              <label for="customEdgeInput" class="subtext">Max long edge (px)</label>
-              <input type="number" id="customEdgeInput" min="128" max="16384" value="2048" class="text-input compact-input" />
-            </div>
-          </div>
-
-          <!-- Selective EXIF Privacy Scrubber (#2), Date Repair & Wide-Gamut sRGB -->
-          <div class="field-group">
-            <label class="field-label">EXIF &amp; GPS Privacy</label>
-            <div class="chip-row" id="exifPrivacyChips">
-              <button type="button" class="choice-chip active" data-exif-mode="strip_all">Strip All</button>
-              <button type="button" class="choice-chip" data-exif-mode="gps_only">Scrub GPS Only</button>
-              <button type="button" class="choice-chip" data-exif-mode="keep_all">Keep All</button>
-            </div>
-          </div>
-
-          <div class="toggles-stack">
-            <label class="switch-row compact-switch" id="repairDateRow" for="repairDatesToggle" hidden>
-              <div>
-                <span class="switch-title">Repair missing capture dates</span>
-                <span class="subtext">Rebuilds EXIF dates from IMG_YYYYMMDD / WhatsApp filenames</span>
-              </div>
-              <input type="checkbox" id="repairDatesToggle" class="toggle-checkbox" checked />
+              <input type="checkbox" class="switch-input" id="toggleStorageSaver" checked />
             </label>
 
-            <label class="switch-row compact-switch" for="srgbToggle">
-              <div>
-                <span class="switch-title">Normalize Display P3 &rarr; sRGB</span>
-                <span class="subtext">Embeds standard sRGB ICC profile for consistent colors</span>
+            <label class="toggle-row" for="toggleDeleteOriginals">
+              <div class="toggle-copy">
+                <span class="toggle-title">Delete Higher-Res Files from Upload Folder</span>
+                <span class="toggle-sub">Verifies converted output integrity first, then automatically removes the large original from <code>Incoming/</code>.</span>
               </div>
-              <input type="checkbox" id="srgbToggle" class="toggle-checkbox" checked />
+              <input type="checkbox" class="switch-input" id="toggleDeleteOriginals" checked />
+            </label>
+
+            <label class="toggle-row" for="toggleCompressVideos">
+              <div class="toggle-copy">
+                <span class="toggle-title">Downscale 4K / High-Res Videos to 1080p MP4</span>
+                <span class="toggle-sub">Compresses videos above 1080p to H.264/AAC MP4 (uses hardware MediaCodec on Pixel 1–5).</span>
+              </div>
+              <input type="checkbox" class="switch-input" id="toggleCompressVideos" checked />
+            </label>
+
+            <label class="toggle-row" for="toggleAutoWatch">
+              <div class="toggle-copy">
+                <span class="toggle-title">Auto-Watch, Per-Folder Profiles &amp; Quarantine Guard</span>
+                <span class="toggle-sub">Watches <code>Incoming/*</code> automatically and isolates broken files into <code>Quarantine/</code> after 2 failed retries.</span>
+              </div>
+              <input type="checkbox" class="switch-input" id="toggleAutoWatch" checked />
+            </label>
+
+            <label class="toggle-row" for="toggleSmartMetadata">
+              <div class="toggle-copy">
+                <span class="toggle-title">Smart EXIF Repair (WhatsApp Dates + Google Takeout JSON + SHA-256 Dedup)</span>
+                <span class="toggle-sub">Rebuilds missing EXIF dates from Android filenames, merges Takeout <code>.json</code> GPS/dates, and skips duplicate files.</span>
+              </div>
+              <input type="checkbox" class="switch-input" id="toggleSmartMetadata" checked />
             </label>
           </div>
 
-          <!-- Progressive Disclosure: Studio Enhancements -->
-          <details class="studio-drawer" id="studioDrawer">
-            <summary class="studio-summary">
-              <span>Studio Enhancements &amp; Redaction</span>
-              <span class="value-badge" id="enhancementsCountBadge">Off</span>
-            </summary>
-
-            <div class="studio-body">
-              <label class="switch-row compact-switch" for="cutoutToggle">
-                <div>
-                  <span class="switch-title">Offline Subject Cutout</span>
-                  <span class="subtext">Removes border background to transparent WebP/PNG</span>
-                </div>
-                <input type="checkbox" id="cutoutToggle" class="toggle-checkbox" />
-              </label>
-
-              <label class="switch-row compact-switch" for="deskewToggle">
-                <div>
-                  <span class="switch-title">Auto-Crop &amp; 4-Corner Scan Deskew</span>
-                  <span class="subtext">Trims borders and straightens angled document pages</span>
-                </div>
-                <input type="checkbox" id="deskewToggle" class="toggle-checkbox" />
-              </label>
-
-              <!-- #6 Tone & Micro-Sharpening -->
-              <div class="sub-field">
-                <label class="field-label">Tone &amp; Detail</label>
-                <div class="chip-row" id="toneChips">
-                  <button type="button" class="choice-chip" data-tone="sharpen">Post-Resize Sharpen</button>
-                  <button type="button" class="choice-chip" data-tone="levels">Auto-Levels</button>
-                  <button type="button" class="choice-chip" data-tone="grayscale">Monochrome</button>
-                </div>
-              </div>
-
-              <!-- #1 Smart Privacy Blur & Redaction -->
-              <div class="sub-field">
-                <label class="field-label">Smart Privacy Blur &amp; Redaction</label>
-                <div class="chip-row" id="redactTargetChips">
-                  <button type="button" class="choice-chip" data-redact="faces">Blur Faces</button>
-                  <button type="button" class="choice-chip" data-redact="text">Blur Text / Numbers</button>
-                </div>
-                <div class="chip-row" id="redactStyleChips" style="margin-top:8px">
-                  <button type="button" class="choice-chip active" data-rstyle="blur">Gaussian Blur</button>
-                  <button type="button" class="choice-chip" data-rstyle="pixelate">Pixelate</button>
-                  <button type="button" class="choice-chip" data-rstyle="solid">Solid Bar</button>
-                </div>
-                <p class="subtext" id="customRedactBoxesHint" style="margin-top:6px">
-                  Tip: Open the Before/After Loupe to drag custom redaction boxes.
-                </p>
-              </div>
-
-              <!-- #7 Smart Aspect-Ratio Framing -->
-              <div class="sub-field">
-                <label class="field-label">Aspect Ratio Framing</label>
-                <div class="chip-row" id="aspectChips">
-                  <button type="button" class="choice-chip active" data-aspect="original">Original</button>
-                  <button type="button" class="choice-chip" data-aspect="1:1">1:1</button>
-                  <button type="button" class="choice-chip" data-aspect="4:5">4:5</button>
-                  <button type="button" class="choice-chip" data-aspect="16:9">16:9</button>
-                  <button type="button" class="choice-chip" data-aspect="9:16">9:16</button>
-                </div>
-                <div class="chip-row" id="frameModeWrap" style="margin-top:8px" hidden>
-                  <button type="button" class="choice-chip active" data-fmode="blur">Blur Backdrop</button>
-                  <button type="button" class="choice-chip" data-fmode="white">White Pad</button>
-                  <button type="button" class="choice-chip" data-fmode="black">Black Pad</button>
-                  <button type="button" class="choice-chip" data-fmode="crop">Center Crop</button>
-                </div>
-              </div>
-
-              <!-- #7 Text + Logo Watermark + 45° Tiled Proof -->
-              <div class="sub-field">
-                <label class="field-label" for="watermarkTextInput">Watermark &amp; Brand Logo</label>
-                <input type="text" id="watermarkTextInput" class="text-input" placeholder="Optional text (e.g., © 2026 Studio)" maxlength="80" />
-                <div class="logo-picker-row">
-                  <input type="file" id="watermarkLogoInput" accept="image/png,image/webp,image/*" hidden />
-                  <button type="button" class="secondary-btn compact-btn" id="pickLogoBtn">+ Logo PNG/WebP</button>
-                  <span class="subtext" id="logoFilenameLabel">No logo selected</span>
-                  <button type="button" class="ghost-btn compact-btn" id="clearLogoBtn" hidden>&times;</button>
-                </div>
-                <div class="watermark-extra" id="watermarkExtraWrap" hidden>
-                  <select id="watermarkPosSelect" class="text-input">
-                    <option value="bottom-right">Bottom Right</option>
-                    <option value="bottom-left">Bottom Left</option>
-                    <option value="top-right">Top Right</option>
-                    <option value="top-left">Top Left</option>
-                    <option value="center">Center</option>
-                  </select>
-                  <div class="wm-opacity-box">
-                    <span class="subtext" id="wmOpacityLabel">65%</span>
-                    <input type="range" id="watermarkOpacitySlider" min="15" max="100" value="65" class="range-slider" />
-                  </div>
-                </div>
-                <label class="switch-row compact-switch" id="watermarkTiledRow" for="watermarkTiledToggle" style="margin-top:8px" hidden>
-                  <div>
-                    <span class="switch-title">45&deg; Diagonal Tiled Proof Grid</span>
-                    <span class="subtext">Repeats watermark across entire photo</span>
-                  </div>
-                  <input type="checkbox" id="watermarkTiledToggle" class="toggle-checkbox" />
-                </label>
-              </div>
-
-              <!-- #2 Custom EXIF Authorship Tags -->
-              <div class="sub-field">
-                <label class="field-label">Embed EXIF Authorship (Optional)</label>
-                <div class="two-col-inputs">
-                  <input type="text" id="exifArtistInput" class="text-input" placeholder="Artist / Creator" maxlength="80" />
-                  <input type="text" id="exifCopyrightInput" class="text-input" placeholder="Copyright notice" maxlength="120" />
-                </div>
-              </div>
-
-              <!-- Token Batch Renaming -->
-              <div class="sub-field">
-                <label class="field-label" for="renamePatternInput">Batch Rename Template</label>
-                <input type="text" id="renamePatternInput" class="text-input mono-input" value="{orig}" placeholder="{date}_{orig}_{seq}" />
-                <div class="token-row" id="renameTokens">
-                  <button type="button" class="token-pill" data-token="{orig}">{orig}</button>
-                  <button type="button" class="token-pill" data-token="{date}">{date}</button>
-                  <button type="button" class="token-pill" data-token="{width}x{height}">{width}x{height}</button>
-                  <button type="button" class="token-pill" data-token="{seq}">{seq}</button>
-                  <button type="button" class="token-pill" data-token="{format}">{format}</button>
-                </div>
-              </div>
-            </div>
-          </details>
-
-          <button type="button" class="primary-btn full-btn" id="convertBtn" disabled>
-            Select Photos to Convert
-          </button>
+          <div class="manual-action-bar">
+            <button class="btn btn-primary" id="processNowBtn">Convert &amp; Move All in Incoming Now</button>
+            <span class="muted small-note" id="diskUsageNote">Checking storage...</span>
+          </div>
         </div>
       </div>
 
-      <!-- Latest Batch Results -->
-      <div class="surface-card results-section" id="batchResultsCard" hidden>
-        <div class="card-header">
+      <!-- Per-Folder Profiles Card -->
+      <div class="card section-gap">
+        <div class="card-head">
           <div>
-            <h2>Converted Batch</h2>
-            <p class="subtext" id="batchSummaryText"></p>
-          </div>
-          <div class="header-actions">
-            <button type="button" class="secondary-btn" id="exportBatchPdfBtn">Export PDF</button>
-            <button type="button" class="secondary-btn" id="downloadBatchZipBtn">Download All (.zip)</button>
+            <h2>Per-Folder Upload Profiles (<code>/Incoming/&lt;Folder&gt;/</code>)</h2>
+            <p class="muted">Drop files into any subfolder via the <strong>Household Samba Android App</strong>, Samba/SMB share, Android Widget, WebDAV, FTP, or Syncthing to apply its automatic quality &amp; album rule.</p>
           </div>
         </div>
-        <div class="results-list" id="batchResultsList"></div>
+
+        <div class="profile-rules-grid" id="profileRulesList"></div>
+
+        <form class="add-profile-bar" id="addProfileForm">
+          <input type="text" id="newProfileFolder" placeholder="Subfolder name (e.g. Partner, Kids, Trip2026)" required />
+          <select id="newProfileMode">
+            <option value="saver">Storage Saver (≤16 MP + 1080p)</option>
+            <option value="original">Original Quality (100% Untouched)</option>
+          </select>
+          <input type="text" id="newProfileOutSub" placeholder="Output album subfolder (optional, e.g. Family)" />
+          <button type="submit" class="btn btn-secondary">+ Add Folder Rule</button>
+        </form>
       </div>
-    </section>
 
-    <!-- TAB 2: PDF, WATCHED FOLDER, COLLAGE, ANIMATION & WEBPACK -->
-    <section class="panel" id="panel-tools" role="tabpanel">
-      <div class="tools-grid">
-        <!-- Card 1: Batch Photo-to-PDF & Scan Sheet Exporter -->
-        <div class="surface-card">
-          <div class="card-header">
+      <!-- Dual Live Folder Explorer: Folder 1 (Incoming) vs Folder 2 (Output) -->
+      <div class="grid-two section-gap">
+        <div class="card">
+          <div class="card-head">
             <div>
-              <h2>Photo-to-PDF &amp; Scan Sheet</h2>
-              <p class="subtext">Combine photos into a size-optimized PDF with perspective deskew &amp; scan contrast.</p>
+              <h2>Folder 1: Incoming Uploads</h2>
+              <p class="muted">High-res staging folder — automatically emptied once converted &amp; verified.</p>
+            </div>
+            <div class="card-actions">
+              <button class="btn btn-ghost btn-sm" id="clearIncomingBtn">Clear Folder</button>
             </div>
           </div>
-
-          <div class="dropzone compact-dropzone" id="pdfDropzone" tabindex="0" role="button">
-            <input type="file" id="pdfFileInput" multiple accept="image/*,.heic,.heif,.avif,.dng" hidden />
-            <p class="dropzone-headline">Select photos for PDF pages or <span>browse</span></p>
-            <p class="dropzone-caption" id="pdfFilesLabel">No files selected yet</p>
-          </div>
-
-          <div class="field-group" style="margin-top:14px">
-            <label class="field-label">Page Size &amp; Margins</label>
-            <div class="chip-row" id="pdfPageChips" style="margin-bottom:8px">
-              <button type="button" class="choice-chip active" data-pdf-page="a4">A4</button>
-              <button type="button" class="choice-chip" data-pdf-page="letter">US Letter</button>
-              <button type="button" class="choice-chip" data-pdf-page="fit">Fit Photo</button>
-            </div>
-            <div class="chip-row" id="pdfMarginChips">
-              <button type="button" class="choice-chip" data-pdf-margin="none">No Margin</button>
-              <button type="button" class="choice-chip active" data-pdf-margin="small">Small Margin</button>
-              <button type="button" class="choice-chip" data-pdf-margin="standard">Standard</button>
-            </div>
-          </div>
-
-          <div class="toggles-stack">
-            <label class="switch-row compact-switch" for="pdfDeskewToggle">
-              <div>
-                <span class="switch-title">Auto-Crop &amp; 4-Corner Perspective Deskew</span>
-                <span class="subtext">Straightens angled receipts, cards &amp; pages</span>
-              </div>
-              <input type="checkbox" id="pdfDeskewToggle" class="toggle-checkbox" />
-            </label>
-
-            <label class="switch-row compact-switch" for="pdfScanFilterToggle">
-              <div>
-                <span class="switch-title">High-Contrast Document Scan Filter</span>
-                <span class="subtext">Crisp grayscale boost for text legibility</span>
-              </div>
-              <input type="checkbox" id="pdfScanFilterToggle" class="toggle-checkbox" />
-            </label>
-          </div>
-
-          <button type="button" class="primary-btn full-btn" id="buildPdfBtn" disabled>
-            Select Photos to Build PDF
-          </button>
-        </div>
-
-        <!-- Card 2: Contact Sheet, Collage & 2-Up ID Card Builder (#3) -->
-        <div class="surface-card">
-          <div class="card-header">
-            <div>
-              <h2>Contact Sheet, Collage &amp; ID Card</h2>
-              <p class="subtext">Merge photos into a 2-Up Front/Back ID sheet, comparison pair, or proof grid.</p>
-            </div>
-          </div>
-
-          <div class="dropzone compact-dropzone" id="collageDropzone" tabindex="0" role="button">
-            <input type="file" id="collageFileInput" multiple accept="image/*,.heic,.heif,.avif,.dng" hidden />
-            <p class="dropzone-headline">Select photos for layout or <span>browse</span></p>
-            <p class="dropzone-caption" id="collageFilesLabel">No files selected yet</p>
-          </div>
-
-          <div class="field-group" style="margin-top:14px">
-            <label class="field-label">Grid Layout</label>
-            <div class="chip-row" id="collageLayoutChips">
-              <button type="button" class="choice-chip active" data-clayout="2x1">2&times;1 Side-by-Side</button>
-              <button type="button" class="choice-chip" data-clayout="id_card_2up">ID Card 2-Up (A4)</button>
-              <button type="button" class="choice-chip" data-clayout="2x2">2&times;2 Grid</button>
-              <button type="button" class="choice-chip" data-clayout="3x3">3&times;3 Sheet</button>
-            </div>
-          </div>
-
-          <div class="field-group">
-            <label class="field-label">Export Format</label>
-            <div class="chip-row" id="collageFormatChips">
-              <button type="button" class="choice-chip active" data-cfmt="jpeg">JPEG</button>
-              <button type="button" class="choice-chip" data-cfmt="webp">WebP</button>
-              <button type="button" class="choice-chip" data-cfmt="png">PNG</button>
-              <button type="button" class="choice-chip" data-cfmt="pdf">PDF Sheet</button>
-            </div>
-          </div>
-
-          <label class="switch-row compact-switch" for="collageCaptionsToggle">
-            <div>
-              <span class="switch-title">Show filename captions</span>
-              <span class="subtext">Prints clean filenames beneath each grid cell</span>
-            </div>
-            <input type="checkbox" id="collageCaptionsToggle" class="toggle-checkbox" />
-          </label>
-
-          <button type="button" class="primary-btn full-btn" id="buildCollageBtn" style="margin-top:14px" disabled>
-            Select Photos for Collage
-          </button>
-        </div>
-
-        <!-- Card 3: Burst-to-Animated WebP / GIF Maker (#5) -->
-        <div class="surface-card">
-          <div class="card-header">
-            <div>
-              <h2>Burst-to-Animated WebP / GIF</h2>
-              <p class="subtext">Turn 2+ burst or sequence photos into a smooth looping animation.</p>
-            </div>
-          </div>
-
-          <div class="dropzone compact-dropzone" id="animDropzone" tabindex="0" role="button">
-            <input type="file" id="animFileInput" multiple accept="image/*,.heic,.heif,.avif" hidden />
-            <p class="dropzone-headline">Select 2+ sequence frames or <span>browse</span></p>
-            <p class="dropzone-caption" id="animFilesLabel">No frames selected yet</p>
-          </div>
-
-          <div class="field-group" style="margin-top:14px">
-            <div class="field-row">
-              <div class="chip-row" id="animFormatChips">
-                <button type="button" class="choice-chip active" data-afmt="webp">Animated WebP</button>
-                <button type="button" class="choice-chip" data-afmt="gif">Animated GIF</button>
-              </div>
-              <span class="value-badge" id="animDelayBadge">240 ms</span>
-            </div>
-            <input type="range" id="animDelaySlider" min="60" max="1000" step="20" value="240" class="range-slider" />
-          </div>
-
-          <label class="switch-row compact-switch" for="animBoomerangToggle">
-            <div>
-              <span class="switch-title">Boomerang ping-pong loop</span>
-              <span class="subtext">Plays forward then smoothly reverses back</span>
-            </div>
-            <input type="checkbox" id="animBoomerangToggle" class="toggle-checkbox" />
-          </label>
-
-          <button type="button" class="primary-btn full-btn" id="buildAnimBtn" style="margin-top:14px" disabled>
-            Select 2+ Frames to Animate
-          </button>
-        </div>
-
-        <!-- Card 4: Background Watched-Folder Auto-Converter -->
-        <div class="surface-card">
-          <div class="card-header">
-            <div>
-              <h2>Watched-Folder Auto-Converter</h2>
-              <p class="subtext">Monitors an inbox directory and auto-converts newly added photos.</p>
-            </div>
-            <span class="saved-pill" id="watcherStatusBadge">Idle</span>
-          </div>
-
-          <div class="watcher-meta-box">
-            <div>
-              <span class="field-label" style="margin-bottom:2px">Watched Directory</span>
-              <code class="mono-path" id="watcherPathText">data/watch_inbox</code>
-            </div>
-            <div class="watcher-metrics">
-              <span>Pending: <strong id="watcherPendingCount">0</strong></span>
-              <span>Auto-converted: <strong id="watcherProcessedCount">0</strong></span>
-            </div>
-          </div>
-
-          <label class="switch-row compact-switch" for="watcherEnableToggle" style="margin-top:14px">
-            <div>
-              <span class="switch-title">Enable Background Auto-Watch</span>
-              <span class="subtext">Uses your active Output Settings &amp; Studio Enhancements</span>
-            </div>
-            <input type="checkbox" id="watcherEnableToggle" class="toggle-checkbox" />
-          </label>
-
-          <div class="watcher-actions">
-            <button type="button" class="secondary-btn" id="watcherDropSampleBtn">Drop Sample Photo in Inbox</button>
-            <button type="button" class="primary-btn" id="watcherScanNowBtn">Scan Folder Now</button>
+          <div class="file-list" id="incomingFileList">
+            <div class="empty-state">Incoming upload folder is clean — all uploads processed &amp; removed.</div>
           </div>
         </div>
 
-        <!-- Card 5 (Full Width): Responsive <picture> Web Pack + LQIP & Palette Generator (#10) -->
-        <div class="surface-card full-span-card">
-          <div class="card-header">
+        <div class="card">
+          <div class="card-head">
             <div>
-              <h2>Responsive &lt;picture&gt; Web Pack, LQIP &amp; Palette Generator</h2>
-              <p class="subtext">Export 480w / 960w / 1920w AVIF + WebP + JPEG breakpoints, blur-up LQIP, 5 dominant hex swatches &amp; HTML snippet.</p>
+              <h2>Folder 2: Google Photos Output</h2>
+              <p class="muted">Ready for Google Photos backup on your Pixel. Click any item to inspect EXIF &amp; profile used.</p>
             </div>
-            <div class="header-actions">
-              <input type="file" id="webpackFileInput" accept="image/*,.heic,.heif,.avif,.dng" hidden />
-              <button type="button" class="secondary-btn" id="webpackSampleBtn">Preview Sample Pack</button>
-              <button type="button" class="secondary-btn" id="webpackPickBtn">Choose Photo</button>
-              <button type="button" class="primary-btn" id="webpackDownloadBtn">Download Web Pack (.zip)</button>
+            <div class="card-actions">
+              <button class="btn btn-ghost btn-sm" id="clearOutputBtn" title="Free local space after Google Photos finishes cloud sync">Clear Synced</button>
             </div>
           </div>
+          <div class="file-list" id="outputFileList">
+            <div class="empty-state">No converted photos in Output yet. Drop photos or click "Drop Photos + Takeout + 4K Video" above!</div>
+          </div>
+        </div>
+      </div>
 
-          <div id="webpackPreviewArea" class="webpack-preview" hidden>
-            <div class="webpack-left">
-              <img id="webpackLqipPreview" class="lqip-preview" alt="LQIP blur preview" />
-              <div class="palette-row" id="webpackSwatches"></div>
-            </div>
-            <div class="webpack-right">
-              <div class="field-row">
-                <span class="field-label" style="margin:0">Generated &lt;picture&gt; HTML Snippet</span>
-                <button type="button" class="ghost-btn compact-btn" id="copySnippetBtn">Copy HTML</button>
-              </div>
-              <pre class="code-box" id="webpackSnippetCode"></pre>
-            </div>
+      <!-- Conversion History & Space Saved Ledger -->
+      <div class="card section-gap">
+        <div class="card-head">
+          <div>
+            <h2>Conversion &amp; Deletion History</h2>
+            <p class="muted">Every processed file with matched folder profile, before/after megapixels, bytes freed, EXIF verification, and cleanup status.</p>
           </div>
+          <div class="card-actions">
+            <button class="btn btn-ghost btn-sm" id="clearHistoryBtn">Clear Log</button>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table class="ledger-table">
+            <thead>
+              <tr>
+                <th>File</th>
+                <th>Profile &amp; Mode</th>
+                <th>Original (Folder 1)</th>
+                <th>Output (Folder 2)</th>
+                <th>Space Saved</th>
+                <th>Metadata Kept</th>
+                <th>High-Res Deleted</th>
+              </tr>
+            </thead>
+            <tbody id="historyTableBody">
+              <tr>
+                <td colspan="7" class="empty-cell">No conversions logged yet.</td>
+              </tr>
+            </tbody>
+          </table>
         </div>
       </div>
     </section>
 
-    <!-- TAB 3: PRESETS -->
-    <section class="panel" id="panel-presets" role="tabpanel">
-      <div class="section-topbar">
-        <div>
-          <h2>Conversion Presets</h2>
-          <p class="subtext">Apply a one-tap profile or save your current settings &amp; enhancements.</p>
+    <!-- TAB 2: GALLERY & EXIF INSPECTOR -->
+    <section class="tab-panel" id="tab-gallery">
+      <div class="card">
+        <div class="card-head">
+          <div>
+            <h2>Google Photos Output Gallery</h2>
+            <p class="muted">Click any converted photo or video to inspect resolution, file size reduction, camera model, date taken, and GPS location.</p>
+          </div>
         </div>
-        <button type="button" class="secondary-btn" id="toggleNewPresetBtn">+ Save Current Settings</button>
+        <div class="gallery-grid" id="galleryGrid">
+          <div class="empty-state">No media in Output folder yet.</div>
+        </div>
       </div>
+    </section>
 
-      <form class="surface-card preset-form" id="newPresetForm" hidden>
-        <div class="preset-form-grid">
-          <input type="text" id="presetNameInput" class="text-input" placeholder="Preset name (e.g., Safe Social No GPS)" required />
-          <input type="text" id="presetDescInput" class="text-input" placeholder="Short description (optional)" />
-          <button type="submit" class="primary-btn">Save Preset</button>
+    <!-- TAB 3: QUARANTINE FOLDER FOR CORRUPTED TRANSFERS -->
+    <section class="tab-panel" id="tab-quarantine">
+      <div class="card">
+        <div class="card-head">
+          <div>
+            <h2>Quarantine Folder (<code>PixelNAS/Quarantine/</code>)</h2>
+            <p class="muted">Half-transferred or corrupted files are isolated here after 2 failed decode attempts (shielded by <code>.nomedia</code>) so they never stall your watcher queue.</p>
+          </div>
+          <div class="card-actions">
+            <button class="btn btn-secondary btn-sm" id="testCorruptTabBtn">Simulate Corrupted Transfer</button>
+            <button class="btn btn-primary btn-sm" id="retryAllQuarantineBtn">Retry All</button>
+            <button class="btn btn-ghost btn-sm" id="clearQuarantineBtn">Clear Quarantine</button>
+          </div>
+        </div>
+
+        <div class="file-list" id="quarantineList">
+          <div class="empty-state">No corrupted transfers in Quarantine — pipeline is 100% healthy!</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 4: SAMBA SHARE, HOUSEHOLD ANDROID APP & NAS NETWORK MOUNTS -->
+    <section class="tab-panel" id="tab-network">
+      <div class="grid-two">
+        <div class="card">
+          <div class="card-head">
+            <div>
+              <h2>Samba File Share (<code>SMB2/3</code>) &amp; Household Android App</h2>
+              <p class="muted">Dedicated 2-APK ecosystem: install <code>PixelPhotoNAS.apk</code> on your closet Pixel 1–5 NAS and <code>PixelPhotoNAS-Household.apk</code> on every family member's Android phone!</p>
+            </div>
+          </div>
+
+          <div class="qr-box">
+            <img id="portalQrImg" alt="Scan to open Pixel NAS Web UI" class="qr-image" />
+            <div class="qr-meta">
+              <strong>Scan from your daily Android phone on Wi-Fi</strong>
+              <p class="muted">Open the NAS dashboard in Chrome or auto-discover this Samba server in the Household Android App.</p>
+              <div class="endpoint-copy-row">
+                <code id="endpointWebUrl">http://...</code>
+                <button class="btn btn-secondary btn-sm copy-btn" data-copy-target="endpointWebUrl">Copy</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="protocol-cards">
+            <div class="protocol-item">
+              <div class="protocol-header">
+                <strong>Samba / SMB2 File Share + Dedicated Household Android App</strong>
+                <span class="badge badge-success" id="smbBadgeStatus">Active</span>
+              </div>
+              <div class="endpoint-copy-row">
+                <code id="endpointSmbUnc">\\192.168.1.x\PixelNAS\Incoming\StorageSaver</code>
+                <button class="btn btn-secondary btn-sm copy-btn" data-copy-target="endpointSmbUnc">Copy</button>
+              </div>
+              <div class="endpoint-copy-row" style="margin-top:6px;">
+                <code id="endpointSmbUrl">smb://192.168.1.x:4445/PixelNAS/</code>
+                <button class="btn btn-secondary btn-sm copy-btn" data-copy-target="endpointSmbUrl">Copy</button>
+              </div>
+              <p class="protocol-help">
+                • <strong>Separate Household APK (<code>com.pixelnas.household</code>)</strong>: Connects directly over native <strong>Samba / SMB2 / SMB3</strong> (standard port <code>445</code> Samba shares AND port <code>4445</code> unrooted Pixel NAS shares) with 1-tap Wi-Fi discovery, Guest or NTLMv2 auth, per-member upload folders, live Samba browser, background Camera Roll Wi-Fi sync, Android Share Sheet, and Home Screen Upload Widget.<br />
+                • Also mounts natively in Windows Explorer, Linux <code>smbclient</code>, Material Files, Solid Explorer, CX File Explorer, and FolderSync.
+              </p>
+            </div>
+
+            <div class="protocol-item">
+              <div class="protocol-header">
+                <strong>Native Android Home Screen Upload Widget + Share Sheet</strong>
+                <span class="badge badge-accent">Included in Household APK</span>
+              </div>
+              <p class="protocol-help">
+                1. Install <code>PixelPhotoNAS-Household.apk</code> on each family member's Android phone and pair your Samba share in 1 tap.<br />
+                2. Pin the <strong>Pixel NAS Samba Upload Widget</strong> to your Home Screen → tap <strong>Saver (≤16 MP)</strong>, <strong>Original</strong>, or <strong>Family</strong> to upload directly over Samba!<br />
+                3. Also shares batches straight from Google Gallery, Samsung Gallery, or Android Files via <strong>Share Sheet → Send to NAS (Samba)</strong>.
+              </p>
+            </div>
+
+            <div class="protocol-item">
+              <div class="protocol-header">
+                <strong>WebDAV Per-Folder Endpoints (FolderSync / Round Sync / Solid Explorer)</strong>
+                <span class="badge badge-success">Active</span>
+              </div>
+              <div class="endpoint-copy-row">
+                <code id="endpointWebdavUrl">http://.../webdav/Incoming/StorageSaver/</code>
+                <button class="btn btn-secondary btn-sm copy-btn" data-copy-target="endpointWebdavUrl">Copy</button>
+              </div>
+              <p class="protocol-help">
+                Profile paths ready out of the box:<br />
+                • <code>/webdav/Incoming/StorageSaver/</code> (shrinks &gt;16 MP &amp; 4K → 1080p)<br />
+                • <code>/webdav/Incoming/Original/</code> (full-res pass-through)<br />
+                • <code>/webdav/Incoming/Family/</code> (routes to <code>DCIM/PixelNAS/Family</code>)
+              </p>
+            </div>
+
+            <div class="protocol-item">
+              <div class="protocol-header">
+                <strong>FTP Server (Port 2121 — No Root Needed on Pixel 1–5)</strong>
+                <span class="badge badge-success" id="ftpBadgeStatus">Active</span>
+              </div>
+              <div class="endpoint-copy-row">
+                <code id="endpointFtpUrl">ftp://192.168.1.x:2121/Incoming/</code>
+                <button class="btn btn-secondary btn-sm copy-btn" data-copy-target="endpointFtpUrl">Copy</button>
+              </div>
+              <p class="protocol-help">Works directly with Android Solid Explorer, Material Files, Owlfiles, Sony/Canon Wi-Fi FTP transfer, FileZilla, and rclone.</p>
+            </div>
+
+            <div class="protocol-item">
+              <div class="protocol-header">
+                <strong>Syncthing-Fork / Local Android Folder Watcher</strong>
+                <span class="badge badge-accent">Auto-Watched</span>
+              </div>
+              <p class="protocol-help">
+                Sync your daily Android camera folder (<em>Send Only</em> in Syncthing-Fork) into <code id="syncIncomingInline">.../Incoming/StorageSaver</code> on your Pixel.
+                Pixel Photo NAS ignores partial <code>.syncthing.*.tmp</code> transfers, converts to <code id="syncOutputInline">.../DCIM/PixelNAS</code>, notifies Android MediaStore, and cleans up high-res copies!
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <div>
+              <h2>2-APK Household Setup Guide</h2>
+              <p class="muted">How the Closet Pixel 1–5 NAS APK + Household Samba Client APK work together.</p>
+            </div>
+          </div>
+
+          <div class="steps-stack">
+            <div class="step-item">
+              <span class="step-num">1</span>
+              <div>
+                <strong>APK #1 (<code>PixelPhotoNAS.apk</code>) → Closet Pixel 1–5 Server</strong>
+                <p>Runs the 24/7 Samba (<code>SMB2</code>), Web UI, WebDAV, and FTP server plus hardware Storage Saver conversion into <code>DCIM/PixelNAS</code> for unlimited Google Photos backup.</p>
+              </div>
+            </div>
+
+            <div class="step-item">
+              <span class="step-num">2</span>
+              <div>
+                <strong>APK #2 (<code>PixelPhotoNAS-Household.apk</code>) → Every Family Phone</strong>
+                <p>Lightweight Samba/SMB2/3 Android client for every household phone: connects directly to <code>\\&lt;NAS&gt;\PixelNAS</code> (port <code>445</code> or <code>4445</code>), uploads batches with atomic rename, browses shares, runs Wi-Fi auto-backup, and adds the Home Screen Widget + Share Sheet target.</p>
+              </div>
+            </div>
+
+            <div class="step-item">
+              <span class="step-num">3</span>
+              <div>
+                <strong>Enable Backup on <code>PixelNAS</code> in Google Photos</strong>
+                <p>Open <strong>Google Photos → Collections / Library → Photos on device → PixelNAS</strong> (plus any custom album folders like <code>Family</code>) and turn <strong>Backup ON</strong>.</p>
+              </div>
+            </div>
+
+            <div class="step-item">
+              <span class="step-num">4</span>
+              <div>
+                <strong>24/7 Closet Server Protection</strong>
+                <p>Includes <code>BOOT_COMPLETED</code> auto-restart after power loss, mDNS auto-discovery (<code>_smb._tcp</code> &amp; <code>_pixelnas._tcp</code>), Wi-Fi lock, 4 GB RAM OOM-safe decoding for 200 MP photos, hardware <code>MediaCodec</code> 1080p encoding, and <strong>41°C Battery Thermal Guard</strong>.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 5: DETAILED ENGINE SETTINGS -->
+    <section class="tab-panel" id="tab-settings">
+      <form class="card settings-form" id="settingsForm">
+        <div class="card-head">
+          <div>
+            <h2>Storage Saver, Quarantine &amp; Folder Settings</h2>
+            <p class="muted">Configure exact resolution thresholds, folder paths, FTP port, retention, and LAN authentication.</p>
+          </div>
+          <button type="submit" class="btn btn-primary">Save Settings</button>
+        </div>
+
+        <div class="grid-two">
+          <div class="field">
+            <label for="inputIncomingDir">Folder 1 — Incoming High-Res Path</label>
+            <input type="text" id="inputIncomingDir" required />
+            <small>Files uploaded via Android Widget, Web, WebDAV, FTP, or Syncthing arrive here first.</small>
+          </div>
+
+          <div class="field">
+            <label for="inputOutputDir">Folder 2 — Google Photos Output Path</label>
+            <input type="text" id="inputOutputDir" required />
+            <small>Converted files land here (on Android default: <code>/storage/emulated/0/DCIM/PixelNAS</code>).</small>
+          </div>
+
+          <div class="field">
+            <label for="inputMaxMp">Max Photo Megapixels: <strong id="labelMaxMp">16.0 MP</strong></label>
+            <input type="range" id="inputMaxMp" min="8" max="24" step="0.5" value="16" />
+            <small>Google Photos Storage Saver limit is <strong>16.0 MP</strong> (e.g., 4618×3464 for 4:3 photos).</small>
+          </div>
+
+          <div class="field">
+            <label for="inputJpegQuality">JPEG Compression Quality: <strong id="labelJpegQuality">85%</strong></label>
+            <input type="range" id="inputJpegQuality" min="65" max="95" step="1" value="85" />
+            <small>85% matches Google Photos visual quality while cutting 50 MP file sizes by 80–90%.</small>
+          </div>
+
+          <div class="field">
+            <label for="inputVideoRes">Max Video Short-Edge Resolution</label>
+            <select id="inputVideoRes">
+              <option value="1080" selected>1080p Full HD (Google Photos Storage Saver standard)</option>
+              <option value="720">720p HD (Maximum space &amp; thermal savings)</option>
+              <option value="2160">2160p 4K (Only re-mux non-MP4 containers)</option>
+            </select>
+          </div>
+
+          <div class="field">
+            <label for="inputSmbPort">Embedded Samba / SMB2 Port &amp; Share Name</label>
+            <div class="auth-inputs">
+              <input type="number" id="inputSmbPort" min="445" max="65535" value="4445" />
+              <input type="text" id="inputSmbShareName" placeholder="Share Name (PixelNAS)" value="PixelNAS" />
+            </div>
+            <small>Unrooted Pixel default <code>4445</code> (or <code>445</code> with root/port-forward). Household APK supports both automatically.</small>
+          </div>
+
+          <div class="field">
+            <label for="inputFtpPort">Embedded FTP Port (Unprivileged &gt;1024)</label>
+            <input type="number" id="inputFtpPort" min="1025" max="65535" value="2121" />
+            <small>Default <code>2121</code> requires no root access on unrooted stock Pixel ROMs.</small>
+          </div>
+
+          <div class="field">
+            <label class="inline-check">
+              <input type="checkbox" id="inputAuthEnabled" />
+              <span>Require Username &amp; Password on Samba, WebDAV &amp; FTP</span>
+            </label>
+            <div class="auth-inputs">
+              <input type="text" id="inputAuthUser" placeholder="Username (e.g. pixel)" />
+              <input type="password" id="inputAuthPass" placeholder="Password" />
+            </div>
+          </div>
+
+          <div class="field">
+            <label for="inputThermal">Pixel Battery Thermal Pause Threshold (°C)</label>
+            <input type="number" id="inputThermal" min="35" max="48" step="0.5" value="41.0" />
+            <small>Pauses heavy 4K video encoding on Android if battery exceeds threshold; auto-resumes when cool.</small>
+          </div>
+
+          <div class="field">
+            <label for="inputRetentionDays">Auto-Clean Synced Output Retention (Days)</label>
+            <select id="inputRetentionDays">
+              <option value="0" selected>Disabled — Keep files in Folder 2 until cleared manually</option>
+              <option value="7">After 7 days (Ideal for 32 GB Pixel 1)</option>
+              <option value="14">After 14 days (Recommended for 64 GB Pixel 2 / 3)</option>
+              <option value="30">After 30 days (Recommended for 128 GB Pixel 4 / 5)</option>
+              <option value="60">After 60 days</option>
+            </select>
+            <small>Automatically frees local Pixel flash storage once Google Photos has backed files up to the cloud.</small>
+          </div>
+
+          <div class="field">
+            <label for="inputMinFreeGb">Low-Storage FIFO Watermark (GB Free)</label>
+            <input type="number" id="inputMinFreeGb" min="0" max="64" step="0.5" value="0" />
+            <small>Set e.g. <code>3.0</code> GB to evict oldest synced files from Folder 2 automatically if disk runs low during large uploads.</small>
+          </div>
         </div>
       </form>
-
-      <div class="presets-grid" id="presetsGrid"></div>
-    </section>
-
-    <!-- TAB 4: HISTORY -->
-    <section class="panel" id="panel-history" role="tabpanel">
-      <div class="stats-strip">
-        <div class="stat-tile">
-          <span class="stat-label">Converted Photos</span>
-          <strong class="stat-value" id="statTotalCount">0</strong>
-        </div>
-        <div class="stat-tile">
-          <span class="stat-label">Space Saved</span>
-          <strong class="stat-value accent" id="statSavedBytes">0 B</strong>
-        </div>
-        <div class="stat-tile">
-          <span class="stat-label">Average Reduction</span>
-          <strong class="stat-value" id="statAvgPct">0%</strong>
-        </div>
-      </div>
-
-      <div class="surface-card">
-        <div class="card-header history-toolbar">
-          <input type="search" id="historySearchInput" class="text-input search-input" placeholder="Filter by filename or format..." />
-          <div class="header-actions">
-            <button type="button" class="secondary-btn" id="exportHistoryPdfBtn" hidden>Export PDF</button>
-            <button type="button" class="secondary-btn" id="downloadHistoryZipBtn" hidden>Download All (.zip)</button>
-            <button type="button" class="ghost-btn danger-text" id="clearHistoryBtn">Clear History</button>
-          </div>
-        </div>
-        <div class="results-list" id="historyList"></div>
-      </div>
     </section>
   </main>
 
-  <!-- Interactive Split-Screen Before/After Loupe + Custom Redaction Box Modal -->
-  <div class="modal-backdrop" id="loupeModal" hidden>
-    <div class="modal-sheet" role="dialog" aria-modal="true" aria-labelledby="loupeTitle">
+  <!-- Media & EXIF Inspector Modal -->
+  <div class="modal-backdrop" id="inspectorModal" hidden>
+    <div class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
       <div class="modal-header">
-        <div>
-          <h2 id="loupeTitle">Before / After Split Loupe</h2>
-          <p class="subtext" id="loupeSubtitle">Drag the divider to compare, or draw privacy redaction boxes.</p>
-        </div>
-        <div class="header-actions">
-          <button type="button" class="secondary-btn compact-btn" id="toggleDrawRedactBtn">+ Draw Redact Box</button>
-          <button type="button" class="ghost-btn compact-btn" id="clearRedactBoxesBtn" hidden>Clear Boxes</button>
-          <div class="mini-seg" id="loupeZoomChips">
-            <button type="button" class="mini-seg-btn active" data-zoom="1">1&times;</button>
-            <button type="button" class="mini-seg-btn" data-zoom="2">2&times;</button>
-            <button type="button" class="mini-seg-btn" data-zoom="3">3&times;</button>
-            <button type="button" class="mini-seg-btn" data-zoom="4">4&times;</button>
-          </div>
-          <button type="button" class="ghost-btn" id="closeLoupeBtn">Close</button>
-        </div>
+        <h3 id="modalTitle">Media &amp; Storage Saver Inspector</h3>
+        <button class="icon-btn" id="closeModalBtn" aria-label="Close modal">✕</button>
       </div>
-
-      <div class="loupe-stage checkerboard" id="loupeStage">
-        <div class="loupe-zoom-inner" id="loupeZoomInner">
-          <img id="loupeAfterImg" class="loupe-img" alt="Converted preview" />
-          <div class="loupe-before-clip" id="loupeBeforeClip">
-            <img id="loupeBeforeImg" class="loupe-img" alt="Original preview" />
-          </div>
-        </div>
-        <div class="redact-draw-box" id="loupeDraftBox" hidden></div>
-        <div class="loupe-divider" id="loupeDivider" style="left: 50%">
-          <div class="loupe-knob">&harr;</div>
-        </div>
-        <span class="loupe-corner-tag left">Original</span>
-        <span class="loupe-corner-tag right" id="loupeAfterTag">Converted</span>
-      </div>
-
-      <div class="loupe-footer">
-        <input type="range" id="loupeSplitSlider" min="0" max="100" value="50" class="range-slider" aria-label="Split comparison position" />
-        <div class="loupe-metrics" id="loupeMetricsText">Calculating live preview...</div>
-      </div>
+      <div class="modal-body" id="modalBody"></div>
     </div>
   </div>
 
-  <!-- EXIF, GPS & Dominant Color Palette Inspector Modal (#2 & #10) -->
-  <div class="modal-backdrop" id="exifModal" hidden>
-    <div class="modal-sheet narrow-sheet" role="dialog" aria-modal="true" aria-labelledby="exifModalTitle">
-      <div class="modal-header">
-        <div>
-          <h2 id="exifModalTitle">EXIF, GPS &amp; Color Inspector</h2>
-          <p class="subtext" id="exifModalSubtitle"></p>
-        </div>
-        <button type="button" class="ghost-btn" id="closeExifModalBtn">Close</button>
-      </div>
-      <div id="exifModalBody" class="inspector-body"></div>
-    </div>
-  </div>
-
-  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
-
-  <script type="module" src="/js/app.js"></script>
+  <div class="toast-container" id="toastContainer"></div>
+  <script src="/app.js"></script>
 </body>
 </html>

@@ -1,22 +1,29 @@
-# Build & runtime artifacts
+# Python / Runtime data
 .venv/
 __pycache__/
 *.py[cod]
 .pytest_cache/
-.ruff_cache/
-.mypy_cache/
+runtime_data/
+*.db
+*.sqlite3
+Unselected files/
 
-# Runtime conversion workspace
-/data/
-/dist-apk/
-
-# Android / Gradle
+# Android / Gradle build outputs
 android-app/.gradle/
 android-app/build/
 android-app/app/build/
 android-app/local.properties
+household-app/.gradle/
+household-app/build/
+household-app/app/build/
+household-app/local.properties
 *.apk
 *.aab
-*.iml
-.idea/
+*.jks
+*.keystore
+!android-app/keystore/pixelnas-release.p12
+
+# OS / Editor
 .DS_Store
+.idea/
+*.iml

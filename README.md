@@ -1,76 +1,64 @@
 <div align="center">
-  <img src="assets/app-icon.png" alt="Photo Convert App Icon" width="96" height="96" />
-  <h1>Photo Convert Android</h1>
-  <p>A clean, modular, privacy-first batch photo converter, optimizer, PDF scan builder, privacy redactor &amp; creative studio for Android and local Web Studio.</p>
+  <img src="assets/branding/logo.png" alt="Pixel Photo NAS Logo" width="640" style="border-radius: 16px;" />
+  <br /><br />
+  <img src="assets/branding/app-icon.png" alt="Pixel Photo NAS App Icon" width="112" height="112" style="border-radius: 26px;" />
+  <h1>Pixel Photo NAS + Dedicated Household Samba Android App</h1>
 </div>
 
----
+Turn any **Google Pixel 1 through Pixel 5** (or Linux/Termux box) into a self-hosted 24/7 home Wi-Fi **Photo & Video NAS** with a **dedicated standalone Household Android App (`com.pixelnas.household`)** that connects **directly over Samba / SMB2 / SMB3 file shares (`\\<nas>\PixelNAS`)**:
 
-## Highlights & Pro Capabilities
+1. **APK #1 — Closet NAS Server (`android-app/` → `PixelPhotoNAS-vX.Y.Z-Pixel1to5-Signed.apk`)**
+   - Runs natively on **Google Pixel 1 through Pixel 5** (or standalone via Python `server/`).
+   - Serves **Samba / SMB2 File Share (`\\<ip>\PixelNAS`, `\\<ip>\Incoming`, `\\<ip>\Output`)**, **Browser NAS Web UI (`:8080`)**, **WebDAV (`/webdav/`)**, **FTP (`:2121`)**, and local Android folder watching.
+   - Automatically converts `> 16.0 MP` photos to `≤ 16.0 MP` Storage Saver JPEGs and `4K` videos to `1080p` MP4s while preserving 100% EXIF dates/GPS, isolating corrupted uploads into `.nomedia`-protected `PixelNAS/Quarantine/`, notifying Android `MediaStore` for **Google Photos Unlimited Backup**, and deleting verified full-resolution staging files.
 
-### Core Conversion & Quality Engine
-- **Focused 4-Tab Navigation (`Convert`, `Tools`, `Presets`, `History`)** — Clean Material 3 Jetpack Compose UI on Android paired with an identical lightweight ES-module Web Studio (`webui/`), keeping advanced studio controls tucked inside progressive-disclosure cards.
-- **Interactive Split-Screen Before/After Loupe (`100%–400%`) + Custom Redact Box Drawing** — Drag a live before/after divider with 1×–4× pixel zoom, instant byte-savings readout, and interactive drag-to-redact boxes before committing to a batch.
-- **Exact Target File-Size Mode (`Fit Under X KB / MB`)** — Binary-searches encoder quality and progressively steps down dimensions only if needed to guarantee strict portal upload caps (`≤ 200 KB`, `≤ 500 KB`, `≤ 1 MB`, `≤ 2 MB`, or custom).
-- **RAW (`DNG`/`CR2`/`CR3`/`ARW`/`NEF`) & Next-Gen `AVIF` / `HEIC` Pipeline** — Hardware `ImageDecoder` support for `HEIC`/`AVIF`/`DNG` on Android plus `pillow-heif` and `rawpy` camera RAW development in Web Studio.
-- **Wide-Gamut Color Normalization (`Display P3` / `Adobe RGB` → `sRGB`)** — Converts wide-gamut ICC profiles to standard `sRGB` so colors never look washed out on the web.
-- **Post-Resize Micro-Sharpening & One-Tap Tone Fixes** — Optional `UnsharpMask` micro-sharpening after downscaling, `Auto-Levels` histogram stretch, and crisp monochrome `Grayscale`.
-
-### Privacy, Metadata & Burst Intelligence
-- **Smart Privacy Blur & Redaction** — Offline ML Kit Face Detection & Text Recognition on Android (and OpenCV Haar + sensitive text heuristics in Web Studio) plus manual Loupe boxes with `Blur`, `Pixelate`, or `Solid Bar` styles.
-- **EXIF / GPS Tag Inspector & Selective Scrubber** — Inspect camera settings, GPS coordinates, sharpness score, `64-bit dHash`, and 5 dominant hex colors, and choose `Strip All`, `Scrub GPS Only` (keeps camera/lens/capture date), or `Keep All`, plus custom `Artist` & `Copyright` EXIF tags.
-- **Perceptual Duplicate & Burst De-Duplicator** — Computes `64-bit dHash` perceptual hashes and Laplacian variance sharpness scores to automatically drop blurry/duplicate burst shots (`Keep Sharpest`).
-- **Token-Based Batch Renaming & Filename Date Repair** — Customize output names with `{orig}`, `{date}`, `{preset}`, `{format}`, `{width}x{height}`, and `{seq}`, and reconstruct missing EXIF `DateTimeOriginal` tags from `IMG_YYYYMMDD` / `IMG-YYYYMMDD-WA` filenames.
-
-### Creative Layouts, Scans, Animation & Web Delivery
-- **Auto-Crop & 4-Corner Perspective Deskew for Scans** — Automatically detects tilted pages/receipts on dark surfaces, trims borders, and applies 4-corner homography rectification in both single-image conversion and PDF scan pipelines.
-- **Batch Photo-to-PDF & Scan Sheet Exporter** — Pack multiple photos into a compact `A4`, `US Letter`, or `Fit Photo` multi-page PDF with configurable margins, auto-deskew, and high-contrast document scan enhancement.
-- **Contact Sheet, Collage & 2-Up ID Card Sheet** — Compose `2×1`, `1×2`, `2×2`, or `3×3` grids with optional filename captions, or center front + back ID cards onto a printable `A4` sheet (`JPEG`/`PNG`/`WebP`/`PDF`).
-- **Burst-to-Animated `WebP` / `GIF` Maker** — Combine 2+ burst frames with configurable frame speed and smooth ping-pong `Boomerang` looping.
-- **Offline Subject Cutout & Smart Aspect Framing (`1:1`, `4:5`, `16:9`, `9:16`)** — Remove backgrounds to transparent `WebP`/`PNG` or frame photos onto social aspect ratios with soft-blurred ambient backdrops.
-- **Logo Image Watermark & 45° Diagonal Tiled Proof Overlay** — Stamp text and/or a transparent `PNG`/`WebP` logo at any anchor or repeat across a 45° diagonal proof grid.
-- **Responsive `<picture>` Web Pack + LQIP & Color Palette Generator** — Exports a developer-ready `.zip` containing `480w`/`960w`/`1920w` `WebP` + `JPEG` breakpoints, an inline base64 blur-up LQIP placeholder, `palette.json`, and copyable `snippet.html`.
-- **Background Watched-Folder Auto-Converter, Batch `.zip` Share, Launcher Shortcuts & Safe Original Cleanup** — Android `WorkManager` folder auto-watch, one-tap `.zip` sharing, dynamic app launcher shortcuts (*Quick WebP*, *Fit ≤ 500 KB*, *PDF & Tools*), and Android 11+ `MediaStore.createTrashRequest` original photo cleanup.
+2. **APK #2 — Separate Household Android App (`household-app/` → `PixelPhotoNAS-Household-vX.Y.Z-SambaClient-Signed.apk`)**
+   - Standalone lightweight Android app (`com.pixelnas.household`) built specifically for **every household member's daily Android phone**.
+   - Connects **directly to your NAS over native Samba (`SMB2 / SMB3`, `com.hierynomus:smbj`)** — works seamlessly with **standard Samba shares on port `445`** (`smbd`, Synology, TrueNAS, OpenMediaVault, Windows File Sharing) **AND unrooted Pixel Photo NAS shares on port `4445`**.
+   - Includes **1-Tap Wi-Fi NAS Discovery**, **Guest & NTLMv2 Username/Password/Workgroup Auth**, **Per-Member & Per-Profile Routing** (`StorageSaver`, `Original`, `Family`, `<MemberName>`), **Atomic `.part` → Final Rename + EXIF Timestamp Preservation**, **Live Samba Share Browser**, **Optional Automatic Wi-Fi Camera Roll Sync**, **Android System Share Sheet (`Send to NAS (Samba)`)**, and **Native Android Home Screen Samba Upload Widget**.
 
 ---
 
-## Clean Project Structure
+## Automated 2-APK Compilation & Base-10 Rollover Versioning on Every Merge
 
-```text
-Photo-Convert-Android/
-├── android-app/                 # Native Kotlin + Jetpack Compose Material 3 app
-│   └── app/src/main/java/com/photoconvert/android/
-│       ├── MainActivity.kt      # Edge-to-edge host, Share Sheet receiver & Launcher Shortcuts
-│       ├── data/                # SharedPreferences settings, presets, watcher & history repo
-│       ├── engine/              # Modular engines: Converter, Redactor, Deskewer, Deduplicator,
-│       │                        #   ExifHelper, Palette, Enhancer, Collage, Animation, Zip & WebPack
-│       ├── model/               # Pure Kotlin domain models & 9 built-in presets
-│       ├── worker/              # WorkManager WatchedFolderWorker background auto-converter
-│       └── ui/
-│           ├── MainScreen.kt    # 4-tab Scaffold + Loupe, EXIF Inspector & MediaStore Trash host
-│           ├── ConvertViewModel.kt
-│           ├── components/      # SectionCard, ConvertedItemRow, BeforeAfterLoupeDialog, ExifInspectorDialog
-│           ├── screens/         # ConvertScreen, ToolsScreen, PresetsScreen & HistoryScreen
-│           └── theme/           # Light & Dark Material 3 theme tokens
-├── server/                      # FastAPI + Pillow/pillow-heif/rawpy/OpenCV local studio backend
-├── webui/                       # Modular ES-module Web Studio (app, api, loupe, inspector, tools, formatters)
-├── tests/                       # Automated pytest unit & API integration suite
-└── .github/workflows/           # CI test runner + signed APK release builder
-```
+GitHub Actions (`.github/workflows/build-apk.yml` + `server/versioning.py`) runs full Python + live Android-to-Samba integration tests, signs **both** APKs with the persistent PKCS#12 release keystore (`android-app/keystore/pixelnas-release.p12`), and publishes a tagged **GitHub Release** on every merge to `main`:
+
+- **First merge to `main`**: **`v1.0.0`** (`versionCode = 1`)
+- **Patch increments (`+0.0.1`)**: `v1.0.0` → `v1.0.1` → … → `v1.0.9` → **`v1.1.0`**
+- **Minor column rollover**: `v1.1.0` → … → `v1.8.9` → `v1.9.0` → … → `v1.9.9` → **`v2.0.0`**
 
 ---
 
-## Quick Start (Companion Web Studio)
+## Supported Pixel NAS Devices & Google Photos Unlimited Tiers
 
+| Device Family | Codenames | Android API | Google Photos Entitlement | Recommended Default Mode |
+|---|---|---|---|---|
+| **Pixel / Pixel XL (2016)** | `sailfish`, `marlin` | Android 8.0–10 (API 26–29) | **Unlimited Original Quality** | **Pass-Through (`Saver OFF`)** *(or use `Incoming\StorageSaver\` to save local flash space)* |
+| **Pixel 2 / 2 XL** | `walleye`, `taimen` | Android 8.0–11 (API 26–30) | **Unlimited Storage Saver** | **Storage Saver ON** |
+| **Pixel 3 / 3 XL / 3a / 3a XL** | `blueline`, `crosshatch`, `sargo`, `bonito` | Android 9–12 (API 28–31) | **Unlimited Storage Saver** | **Storage Saver ON** |
+| **Pixel 4 / 4 XL / 4a** | `flame`, `coral`, `sunfish` | Android 10–13 (API 29–33) | **Unlimited Storage Saver** | **Storage Saver ON** |
+| **Pixel 4a (5G) / Pixel 5** | `bramble`, `redfin` | Android 11–14 (API 30–34) | **Unlimited Storage Saver** | **Storage Saver ON** *(Ideal 24/7 closet NAS hardware: 6–8 GB RAM, 128 GB UFS, cool 765G)* |
+
+---
+
+## Quick Start
+
+### 1. Closet Pixel 1–5 NAS Server (`PixelPhotoNAS-vX.Y.Z-Pixel1to5-Signed.apk`)
+1. Install **`PixelPhotoNAS-v1.0.0-Pixel1to5-Signed.apk`** on your closet Pixel 1–5.
+2. Grant **All Files Access** and confirm **NAS Daemon Online** (exposes `\\<pixel-ip>\PixelNAS` on `:4445` plus Web UI `:8080`, WebDAV, and FTP `:2121`).
+3. In **Google Photos → Collections → On this device**, enable **Backup** for `PixelNAS` (and any custom output folders like `Family`).
+
+### 2. Family Phones (`PixelPhotoNAS-Household-vX.Y.Z-SambaClient-Signed.apk`)
+1. Install **`PixelPhotoNAS-Household-v1.0.0-SambaClient-Signed.apk`** on every household Android phone.
+2. Open **Samba Setup → Scan Wi-Fi for Samba NAS** (or enter your NAS IP / Samba share `\\192.168.1.x\PixelNAS`).
+3. Pick your member name (e.g. `Mom`, `Dad`, `Alex`), optionally turn on **Automatic Wi-Fi Camera Roll Sync**, and tap **Pin Samba Upload Widget to Home Screen**!
+
+### 3. Standalone Python / Termux NAS + Samba Server (`server/`)
 ```bash
 pip install -r requirements.txt
 python3 -m server.main
 ```
-
-Open `http://localhost:8080` to batch-convert photos, inspect EXIF/GPS & palettes, redact in the Before/After Loupe, export PDFs/collages/animations/Web Packs, or auto-watch a folder.
-
-Run the automated test suite:
-
+Run the automated test suite (including live SMB2/NTLMv2 Samba transfers & Storage Saver conversion):
 ```bash
 pytest -v
 ```
