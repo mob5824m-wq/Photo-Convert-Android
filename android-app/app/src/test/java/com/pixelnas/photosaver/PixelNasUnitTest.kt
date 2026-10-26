@@ -6,8 +6,11 @@ import com.hierynomus.mssmb2.SMB2ShareAccess
 import com.hierynomus.smbj.SMBClient
 import com.hierynomus.smbj.auth.AuthenticationContext
 import com.hierynomus.smbj.share.DiskShare
+import com.pixelnas.photosaver.converter.MotionPhotoHelper
+import com.pixelnas.photosaver.converter.PerceptualHashHelper
 import com.pixelnas.photosaver.converter.PhotoDimensionCalculator
 import com.pixelnas.photosaver.converter.StorageSaverConverter
+import com.pixelnas.photosaver.converter.TakeoutZipExtractor
 import com.pixelnas.photosaver.model.NasConfig
 import com.pixelnas.photosaver.network.NasSmbServer
 import com.pixelnas.photosaver.util.PixelDeviceDetector
@@ -19,9 +22,12 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
+import java.io.FileOutputStream
 import java.nio.file.Files
 import java.util.EnumSet
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
 
 class PixelNasUnitTest {
 
@@ -59,8 +65,57 @@ class PixelNasUnitTest {
         assertNotNull(fam)
         assertEquals("Family", fam!!.outputSubfolder)
 
+        val pub = cfg.matchFolderProfile(incRoot, File(incRoot, "PublicShare/IMG_20261021_120000.jpg"))
+        assertNotNull(pub)
+        assertTrue(pub!!.stripGps)
+        assertEquals("PublicShare", pub.outputSubfolder)
+
         val rootDefault = cfg.matchFolderProfile(incRoot, File(incRoot, "direct_root.jpg"))
         assertNull(rootDefault)
+    }
+
+    @Test
+    fun `MotionPhotoHelper TakeoutZipExtractor PairingUri and QuietHours work end to end`() {
+        val cfg = NasConfig(smbPort = 4445, smbShareName = "PixelNAS")
+        val uri = cfg.buildPairingUri("192.168.1.50")
+        assertTrue(uri.startsWith("pixelnas://pair?host=192.168.1.50&port=4445&share=PixelNAS"))
+        assertTrue(NasConfig.isWithinQuietHours(23, 23, 7))
+        assertTrue(NasConfig.isWithinQuietHours(3, 23, 7))
+        assertFalse(NasConfig.isWithinQuietHours(14, 23, 7))
+        assertEquals(2, PerceptualHashHelper.hammingDistanceHex("0000000000000003", "0000000000000000"))
+
+        val tempDir = Files.createTempDirectory("pixelnas_adv_unit").toFile()
+        try {
+            // 1. Motion Photo MP4 tail attach + extract
+            val jpeg = File(tempDir, "MVIMG_test.jpg")
+            val minJpeg = byteArrayOf(0xFF.toByte(), 0xD8.toByte()) +
+                ByteArray(4200) { 0x11 } +
+                byteArrayOf(0xFF.toByte(), 0xD9.toByte())
+            jpeg.writeBytes(minJpeg)
+            val mp4Tail = "\u0000\u0000\u0000\u0018ftypmp42\u0000\u0000\u0000\u0000mp42isom".toByteArray(Charsets.ISO_8859_1) +
+                ByteArray(600) { 0x55 }
+            assertTrue(MotionPhotoHelper.attachMotionMp4ToJpeg(jpeg, mp4Tail))
+            val extractedMp4 = MotionPhotoHelper.extractEmbeddedMp4(jpeg)
+            assertNotNull(extractedMp4)
+            assertArrayEquals(mp4Tail, extractedMp4)
+
+            // 2. Takeout .zip safe stream extraction
+            val zipFile = File(tempDir, "takeout-2026.zip")
+            ZipOutputStream(FileOutputStream(zipFile)).use { zos ->
+                zos.putNextEntry(ZipEntry("Takeout/Google Photos/Album2026/IMG_001.jpg"))
+                zos.write(minJpeg)
+                zos.closeEntry()
+                zos.putNextEntry(ZipEntry("Takeout/Google Photos/Album2026/IMG_001.jpg.json"))
+                zos.write("""{"photoTakenTime":{"timestamp":"1712998200"}}""".toByteArray())
+                zos.closeEntry()
+            }
+            val unpacked = TakeoutZipExtractor.extractIncomingZip(zipFile, setOf("jpg", "jpeg"), deleteArchiveAfter = true)
+            assertFalse(zipFile.exists())
+            assertEquals(1, unpacked.size)
+            assertTrue(File(unpacked.first().parentFile, "IMG_001.jpg.json").isFile)
+        } finally {
+            tempDir.deleteRecursively()
+        }
     }
 
     @Test

@@ -77,6 +77,17 @@ class HistoryDatabase:
 
             conn.execute(
                 """
+                CREATE TABLE IF NOT EXISTS seen_dhashes (
+                    dhash_hex TEXT PRIMARY KEY,
+                    output_filename TEXT NOT NULL,
+                    sharpness REAL NOT NULL DEFAULT 0.0,
+                    created_at REAL NOT NULL
+                )
+                """
+            )
+
+            conn.execute(
+                """
                 CREATE TABLE IF NOT EXISTS quarantine_items (
                     quarantine_filename TEXT PRIMARY KEY,
                     original_rel_path TEXT NOT NULL,
@@ -261,4 +272,128 @@ class HistoryDatabase:
         with self._lock, self._connect() as conn:
             conn.execute("DELETE FROM conversion_history")
             conn.execute("DELETE FROM seen_hashes")
+            conn.execute("DELETE FROM seen_dhashes")
             conn.commit()
+
+    def find_near_duplicate_dhash(
+        self, dhash_hex: str, max_distance: int = 6
+    ) -> Optional[Dict]:
+        if not dhash_hex or len(dhash_hex) != 16:
+            return None
+        try:
+            needle = int(dhash_hex, 16)
+        except ValueError:
+            return None
+        with self._lock, self._connect() as conn:
+            rows = conn.execute(
+                "SELECT dhash_hex, output_filename, sharpness FROM seen_dhashes ORDER BY created_at DESC LIMIT 2000"
+            ).fetchall()
+        for r in rows:
+            try:
+                dist = (needle ^ int(r["dhash_hex"], 16)).bit_count()
+            except ValueError:
+                continue
+            if dist <= max_distance:
+                return {
+                    "dhash_hex": r["dhash_hex"],
+                    "output_filename": r["output_filename"],
+                    "sharpness": float(r["sharpness"] or 0.0),
+                    "distance": dist,
+                }
+        return None
+
+    def record_dhash(
+        self, dhash_hex: str, output_filename: str, sharpness: float = 0.0
+    ) -> None:
+        if not dhash_hex:
+            return
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO seen_dhashes (dhash_hex, output_filename, sharpness, created_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (dhash_hex, output_filename, float(sharpness), time.time()),
+            )
+            conn.commit()
+
+    def member_breakdown(self) -> List[Dict]:
+        with self._lock, self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    COALESCE(NULLIF(TRIM(profile_name), ''), 'Default') AS member,
+                    COUNT(*) AS file_count,
+                    COALESCE(SUM(orig_bytes), 0) AS orig_bytes,
+                    COALESCE(SUM(out_bytes), 0) AS out_bytes,
+                    COALESCE(SUM(saved_bytes), 0) AS saved_bytes
+                FROM conversion_history
+                WHERE status = 'completed'
+                GROUP BY COALESCE(NULLIF(TRIM(profile_name), ''), 'Default')
+                ORDER BY orig_bytes DESC, file_count DESC
+                """
+            ).fetchall()
+            out = []
+            for r in rows:
+                d = dict(r)
+                orig = int(d.get("orig_bytes") or 0)
+                saved = int(d.get("saved_bytes") or 0)
+                d["saved_pct"] = round((saved / orig) * 100.0, 1) if orig > 0 else 0.0
+                out.append(d)
+            return out
+
+    def export_snapshot(self) -> Dict:
+        with self._lock, self._connect() as conn:
+            hashes = [
+                dict(r)
+                for r in conn.execute(
+                    "SELECT sha256, output_filename, created_at FROM seen_hashes"
+                ).fetchall()
+            ]
+            dhashes = [
+                dict(r)
+                for r in conn.execute(
+                    "SELECT dhash_hex, output_filename, sharpness, created_at FROM seen_dhashes"
+                ).fetchall()
+            ]
+            history = [
+                dict(r)
+                for r in conn.execute(
+                    "SELECT * FROM conversion_history ORDER BY id DESC LIMIT 500"
+                ).fetchall()
+            ]
+        return {
+            "seen_hashes": hashes,
+            "seen_dhashes": dhashes,
+            "recent_history": history,
+        }
+
+    def import_snapshot(self, payload: Dict) -> int:
+        restored = 0
+        with self._lock, self._connect() as conn:
+            for item in payload.get("seen_hashes") or []:
+                if isinstance(item, dict) and item.get("sha256") and item.get("output_filename"):
+                    conn.execute(
+                        "INSERT OR IGNORE INTO seen_hashes (sha256, output_filename, created_at) VALUES (?, ?, ?)",
+                        (
+                            str(item["sha256"]),
+                            str(item["output_filename"]),
+                            float(item.get("created_at") or time.time()),
+                        ),
+                    )
+                    restored += 1
+            for item in payload.get("seen_dhashes") or []:
+                if isinstance(item, dict) and item.get("dhash_hex") and item.get("output_filename"):
+                    conn.execute(
+                        "INSERT OR IGNORE INTO seen_dhashes (dhash_hex, output_filename, sharpness, created_at) VALUES (?, ?, ?, ?)",
+                        (
+                            str(item["dhash_hex"]),
+                            str(item["output_filename"]),
+                            float(item.get("sharpness") or 0.0),
+                            float(item.get("created_at") or time.time()),
+                        ),
+                    )
+                    restored += 1
+            conn.commit()
+        return restored
+

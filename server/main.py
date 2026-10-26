@@ -14,13 +14,14 @@ import qrcode
 import uvicorn
 from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from PIL import Image, ImageOps
 
 from server.config import (
     PIXEL_PROFILES,
     SettingsManager,
+    build_pairing_uri,
     get_lan_ips,
     sanitize_folder_segment,
 )
@@ -38,6 +39,7 @@ from server.smb_server import EmbeddedSmbServer
 from server.versioning import read_repo_version
 from server.watcher import PipelineWorker, iter_incoming_media, iter_output_media
 from server.webdav import create_webdav_router
+from server.webhook_notifier import send_nas_webhook
 
 
 def create_app(data_dir: Optional[Path] = None) -> FastAPI:
@@ -117,6 +119,7 @@ def create_app(data_dir: Optional[Path] = None) -> FastAPI:
             "profiles": PIXEL_PROFILES,
             "worker": worker.status(),
             "stats": db.summary(),
+            "member_stats": db.member_breakdown(),
             "folders": {
                 "incoming": {
                     "path": str(inc_dir),
@@ -149,6 +152,7 @@ def create_app(data_dir: Optional[Path] = None) -> FastAPI:
                 "webdav_saver_url": f"{base_url}/webdav/Incoming/StorageSaver/",
                 "webdav_original_url": f"{base_url}/webdav/Incoming/Original/",
                 "webdav_family_url": f"{base_url}/webdav/Incoming/Family/",
+                "webdav_publicshare_url": f"{base_url}/webdav/Incoming/PublicShare/",
                 "ftp_enabled": ftp_server.bound_port > 0,
                 "ftp_port": ftp_server.bound_port or cfg.ftp_port,
                 "ftp_url": f"ftp://{lan_ips[0]}:{ftp_server.bound_port or cfg.ftp_port}/Incoming/",
@@ -162,6 +166,13 @@ def create_app(data_dir: Optional[Path] = None) -> FastAPI:
                     f"smb://{lan_ips[0]}/{cfg.smb_share_name or 'PixelNAS'}/"
                     if (smb_server.bound_port or cfg.smb_port) == 445
                     else f"smb://{lan_ips[0]}:{smb_server.bound_port or cfg.smb_port}/{cfg.smb_share_name or 'PixelNAS'}/"
+                ),
+                "pairing_uri": build_pairing_uri(
+                    lan_ip=lan_ips[0],
+                    smb_port=smb_server.bound_port or cfg.smb_port,
+                    share_name=cfg.smb_share_name or "PixelNAS",
+                    auth_enabled=cfg.auth_enabled,
+                    auth_username=cfg.auth_username,
                 ),
                 "video_engine_available": get_ffmpeg_binary() is not None,
             },
@@ -306,8 +317,10 @@ def create_app(data_dir: Optional[Path] = None) -> FastAPI:
             finally:
                 if tmp.exists():
                     tmp.unlink(missing_ok=True)
-            if is_supported_media(dest):
+            if is_supported_media(dest) or dest.suffix.lower() == ".zip":
                 worker.enqueue_if_auto(dest)
+                saved_names.append(dest.relative_to(inc_dir).as_posix())
+            elif dest.suffix.lower() == ".json":
                 saved_names.append(dest.relative_to(inc_dir).as_posix())
             else:
                 skipped_names.append(dest.name)
@@ -373,7 +386,105 @@ def create_app(data_dir: Optional[Path] = None) -> FastAPI:
 
     @app.get("/api/history")
     def get_history(limit: int = 100):
-        return {"items": db.recent(limit=limit), "summary": db.summary()}
+        return {
+            "items": db.recent(limit=limit),
+            "summary": db.summary(),
+            "members": db.member_breakdown(),
+        }
+
+    @app.get("/api/analytics")
+    def get_analytics():
+        return {
+            "summary": db.summary(),
+            "members": db.member_breakdown(),
+        }
+
+    @app.post("/api/webhook/test")
+    def test_webhook(payload: Optional[dict] = None):
+        cfg = settings_mgr.get()
+        url = str((payload or {}).get("webhook_url") or cfg.webhook_url or "").strip()
+        if not url:
+            raise HTTPException(
+                status_code=400, detail="Configure a webhook URL first."
+            )
+        ok, detail = send_nas_webhook(
+            url,
+            "Pixel Photo NAS · Test Alert",
+            "24/7 Health Guard webhook is active (Quarantine, Thermal & Low Storage alerts enabled).",
+            "test",
+        )
+        return {"ok": ok, "detail": detail, "webhook_url": url}
+
+    @app.get("/api/export-zip")
+    def export_folder_zip(
+        folder: str = Query("output", pattern="^(incoming|output)$"),
+        subpath: str = Query(""),
+    ):
+        import tempfile
+        import zipfile
+
+        base = _folder_path(folder)
+        clean_sub = subpath.strip().strip("/\\")
+        target_root = (base / clean_sub).resolve() if clean_sub else base
+        if not str(target_root).startswith(str(base)) or not target_root.exists():
+            raise HTTPException(status_code=404, detail="Export folder not found")
+
+        spool = tempfile.SpooledTemporaryFile(max_size=16 * 1024 * 1024, mode="w+b")
+        with zipfile.ZipFile(spool, mode="w", compression=zipfile.ZIP_STORED) as zf:
+            if target_root.is_file():
+                zf.write(target_root, arcname=target_root.name)
+            else:
+                for p in sorted(target_root.rglob("*")):
+                    if p.is_file() and not p.name.startswith("."):
+                        zf.write(p, arcname=p.relative_to(target_root).as_posix())
+        spool.seek(0)
+
+        def _stream_chunks():
+            try:
+                while True:
+                    chunk = spool.read(256 * 1024)
+                    if not chunk:
+                        break
+                    yield chunk
+            finally:
+                spool.close()
+
+        zip_label = sanitize_folder_segment(clean_sub or folder) or "PixelNAS_Output"
+        return StreamingResponse(
+            _stream_chunks(),
+            media_type="application/zip",
+            headers={
+                "Content-Disposition": f'attachment; filename="{zip_label}.zip"'
+            },
+        )
+
+    @app.get("/api/backup/export")
+    def export_nas_backup():
+        return {
+            "app": "Pixel Photo NAS",
+            "version": read_repo_version(),
+            "settings": settings_mgr.get().sanitized_dict(),
+            "ledger": db.export_snapshot(),
+        }
+
+    @app.post("/api/backup/import")
+    def import_nas_backup(payload: dict):
+        restored_settings = False
+        if isinstance(payload.get("settings"), dict):
+            settings_payload = dict(payload["settings"])
+            # Preserve local machine's incoming/output/quarantine directories unless explicitly valid
+            for dir_key in ("incoming_dir", "output_dir", "quarantine_dir"):
+                settings_payload.pop(dir_key, None)
+            settings_mgr.update(settings_payload)
+            restored_settings = True
+        restored_hashes = 0
+        if isinstance(payload.get("ledger"), dict):
+            restored_hashes = db.import_snapshot(payload["ledger"])
+        return {
+            "restored_settings": restored_settings,
+            "restored_ledger_entries": restored_hashes,
+            "settings": settings_mgr.get().sanitized_dict(),
+        }
 
     @app.delete("/api/history")
     def clear_history():

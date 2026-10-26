@@ -14,12 +14,16 @@ from watchdog.observers import Observer
 
 from server.config import SettingsManager
 from server.converter import (
+    PHOTO_EXTENSIONS,
+    VIDEO_EXTENSIONS,
     find_takeout_sidecar,
     is_supported_media,
     process_media_file,
     resolve_unique_output_path,
 )
 from server.database import HistoryDatabase
+from server.takeout_extractor import extract_incoming_zip
+from server.webhook_notifier import send_nas_webhook
 
 logger = logging.getLogger("pixelnas.watcher")
 
@@ -40,6 +44,29 @@ class _IncomingHandler(FileSystemEventHandler):
     def on_moved(self, event) -> None:
         if not event.is_directory:
             self._notify(Path(event.dest_path))
+
+
+def is_within_quiet_hours(now_hour: int, start_hour: int, end_hour: int) -> bool:
+    s = int(start_hour) % 24
+    e = int(end_hour) % 24
+    h = int(now_hour) % 24
+    if s == e:
+        return True
+    if s < e:
+        return s <= h < e
+    return h >= s or h < e
+
+
+def iter_incoming_zips(inc_dir: Path, recursive: bool) -> Iterator[Path]:
+    if not inc_dir.is_dir():
+        return
+    entries = inc_dir.rglob("*.zip") if recursive else inc_dir.glob("*.zip")
+    for p in sorted(entries):
+        if p.is_file() and not p.name.startswith("."):
+            rel_parts = p.relative_to(inc_dir).parts[:-1]
+            if any(part.startswith(".") for part in rel_parts):
+                continue
+            yield p
 
 
 def iter_incoming_media(inc_dir: Path, recursive: bool) -> Iterator[Path]:
@@ -136,12 +163,16 @@ class PipelineWorker:
         self.db = db
         self._queue: "queue.Queue[Path]" = queue.Queue()
         self._queued_paths: Set[str] = set()
+        self._manual_override_paths: Set[str] = set()
         self._failure_counts: Dict[str, int] = {}
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
         self._active_file: Optional[str] = None
         self._last_error: str = ""
         self._auto_purged_count: int = 0
+        self._unpacked_zip_count: int = 0
+        self._deferred_video_count: int = 0
+        self._last_low_storage_webhook_ts: float = 0.0
         self._observer: Optional[Observer] = None
         self._watched_dir: Optional[Path] = None
         self._worker_thread: Optional[threading.Thread] = None
@@ -195,12 +226,30 @@ class PipelineWorker:
             return False
         return self.enqueue(path)
 
-    def enqueue(self, path: Path) -> bool:
+    def enqueue(self, path: Path, manual_override: bool = False) -> bool:
         resolved = path.resolve()
+        if resolved.suffix.lower() == ".zip" and resolved.is_file():
+            key = str(resolved)
+            with self._lock:
+                if key in self._queued_paths or self._active_file == resolved.name:
+                    return False
+                self._queued_paths.add(key)
+                self._queue.put(resolved)
+                return True
         if not is_supported_media(resolved):
             return False
+        if not manual_override and resolved.suffix.lower() in VIDEO_EXTENSIONS:
+            cfg = self.settings_mgr.get()
+            if cfg.quiet_hours_enabled:
+                now_hr = time.localtime().tm_hour
+                if not is_within_quiet_hours(
+                    now_hr, cfg.quiet_hours_start, cfg.quiet_hours_end
+                ):
+                    return False
         key = str(resolved)
         with self._lock:
+            if manual_override:
+                self._manual_override_paths.add(key)
             if key in self._queued_paths or self._active_file == resolved.name:
                 return False
             self._queued_paths.add(key)
@@ -211,8 +260,12 @@ class PipelineWorker:
         cfg = self.settings_mgr.get()
         inc_dir, _ = self.settings_mgr.ensure_directories()
         count = 0
+        if cfg.extract_takeout_zips:
+            for zp in iter_incoming_zips(inc_dir, cfg.recursive_subfolders):
+                if self.enqueue(zp, manual_override=True):
+                    count += 1
         for p in iter_incoming_media(inc_dir, cfg.recursive_subfolders):
-            if self.enqueue(p):
+            if self.enqueue(p, manual_override=True):
                 count += 1
         return count
 
@@ -287,6 +340,18 @@ class PipelineWorker:
                 "error_message": error_msg,
             }
         )
+        cfg = self.settings_mgr.get()
+        if cfg.webhook_url and cfg.webhook_on_quarantine:
+            threading.Thread(
+                target=send_nas_webhook,
+                args=(
+                    cfg.webhook_url,
+                    "Pixel Photo NAS · File Quarantined",
+                    f"{rel_orig} moved to Quarantine after {attempts} attempts: {error_msg}",
+                    "quarantine",
+                ),
+                daemon=True,
+            ).start()
 
     def process_single_sync(self, filename: str) -> Dict:
         cfg = self.settings_mgr.get()
@@ -308,13 +373,22 @@ class PipelineWorker:
                 self._queued_paths.discard(str(target))
 
     def status(self) -> Dict:
+        cfg = self.settings_mgr.get()
+        now_hr = time.localtime().tm_hour
+        quiet_active = bool(
+            cfg.quiet_hours_enabled
+            and not is_within_quiet_hours(now_hr, cfg.quiet_hours_start, cfg.quiet_hours_end)
+        )
         with self._lock:
             return {
                 "watcher_running": not self._stop_event.is_set(),
-                "auto_watch_enabled": self.settings_mgr.get().auto_watch_enabled,
+                "auto_watch_enabled": cfg.auto_watch_enabled,
                 "queue_size": self._queue.qsize(),
                 "active_file": self._active_file,
                 "auto_purged_count": self._auto_purged_count,
+                "unpacked_zip_count": self._unpacked_zip_count,
+                "deferred_video_count": self._deferred_video_count,
+                "quiet_hours_deferring_videos": quiet_active,
                 "last_error": self._last_error,
             }
 
@@ -343,10 +417,36 @@ class PipelineWorker:
                 inc_dir, out_dir = self.settings_mgr.ensure_directories()
                 protected = {p.get("name", "") for p in cfg.folder_profiles}
                 if cfg.auto_watch_enabled:
+                    if cfg.extract_takeout_zips:
+                        for zp in iter_incoming_zips(inc_dir, cfg.recursive_subfolders):
+                            self.enqueue(zp)
+                    deferred_vids = 0
                     for entry in iter_incoming_media(inc_dir, cfg.recursive_subfolders):
-                        self.enqueue(entry)
+                        if not self.enqueue(entry) and entry.suffix.lower() in VIDEO_EXTENSIONS:
+                            if cfg.quiet_hours_enabled:
+                                deferred_vids += 1
+                    with self._lock:
+                        self._deferred_video_count = deferred_vids
                     if cfg.delete_originals:
                         prune_empty_subfolders(inc_dir, protected)
+                if cfg.webhook_url and cfg.webhook_on_low_storage:
+                    free_gb = shutil.disk_usage(out_dir).free / (1024**3)
+                    now_ts = time.time()
+                    if (
+                        free_gb < cfg.low_storage_alert_gb
+                        and (now_ts - self._last_low_storage_webhook_ts) > 21600.0
+                    ):
+                        self._last_low_storage_webhook_ts = now_ts
+                        threading.Thread(
+                            target=send_nas_webhook,
+                            args=(
+                                cfg.webhook_url,
+                                "Pixel Photo NAS · Low Storage Warning",
+                                f"Only {free_gb:.2f} GB free in Output (threshold {cfg.low_storage_alert_gb:.1f} GB). Google Photos backup or retention purge recommended.",
+                                "storage",
+                            ),
+                            daemon=True,
+                        ).start()
                 if cfg.auto_purge_output_days > 0 or cfg.min_free_storage_gb > 0:
                     removed = enforce_output_retention(
                         out_dir,
@@ -374,8 +474,20 @@ class PipelineWorker:
             try:
                 if path.is_file() and self._wait_until_stable(path):
                     cfg = self.settings_mgr.get()
-                    result = process_media_file(path, cfg, db=self.db)
-                    self.db.record(result)
+                    if path.suffix.lower() == ".zip":
+                        if cfg.extract_takeout_zips:
+                            extracted = extract_incoming_zip(
+                                path,
+                                PHOTO_EXTENSIONS | VIDEO_EXTENSIONS,
+                                delete_archive_after=cfg.delete_originals,
+                            )
+                            with self._lock:
+                                self._unpacked_zip_count += 1
+                            for item in extracted:
+                                self.enqueue(item)
+                    else:
+                        result = process_media_file(path, cfg, db=self.db)
+                        self.db.record(result)
                     with self._lock:
                         self._failure_counts.pop(key, None)
                     if cfg.delete_originals:

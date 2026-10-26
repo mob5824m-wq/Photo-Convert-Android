@@ -18,6 +18,8 @@ data class SmbConnectionConfig(
     val password: String = "",
     val workgroup: String = "WORKGROUP",
     val autoCameraSyncWifiOnly: Boolean = false,
+    val syncChargingOnly: Boolean = false,
+    val trustedSubnetPrefix: String = "",
     val syncVideosToo: Boolean = true
 ) {
     val cleanShareName: String
@@ -75,6 +77,46 @@ data class SmbConnectionConfig(
     companion object {
         fun sanitizeSegment(raw: String): String =
             raw.trim().replace(Regex("[^A-Za-z0-9._ -]"), "").trim('.', ' ', '/', '\\')
+
+        /**
+         * Parses a 1-tap `pixelnas://pair?host=...&port=...&share=...&auth=...` QR / deep-link URI
+         * using pure JVM query parsing so it works identically in Android runtime & JVM unit tests.
+         */
+        fun parsePairingUri(
+            raw: String,
+            existing: SmbConnectionConfig = SmbConnectionConfig()
+        ): SmbConnectionConfig? {
+            val trimmed = raw.trim()
+            if (!trimmed.startsWith("pixelnas://pair", ignoreCase = true)) return null
+            val query = trimmed.substringAfter('?', "")
+            if (query.isBlank()) return null
+            val params = LinkedHashMap<String, String>()
+            for (pair in query.split('&')) {
+                if (pair.isBlank()) continue
+                val k = java.net.URLDecoder.decode(pair.substringBefore('='), "UTF-8").lowercase()
+                val v = java.net.URLDecoder.decode(pair.substringAfter('=', ""), "UTF-8")
+                params[k] = v
+            }
+            val host = params["host"]?.trim().orEmpty()
+            if (host.isBlank()) return null
+            val port = params["port"]?.toIntOrNull()?.coerceIn(1, 65535) ?: 4445
+            val share = params["share"]?.trim()?.ifBlank { "PixelNAS" } ?: "PixelNAS"
+            val authMode = if (params["auth"].equals("credentials", ignoreCase = true)) {
+                SmbAuthMode.CREDENTIALS
+            } else {
+                SmbAuthMode.GUEST
+            }
+            val user = params["user"]?.trim()?.ifBlank { existing.username } ?: existing.username
+            val workgroup = params["workgroup"]?.trim()?.ifBlank { "WORKGROUP" } ?: "WORKGROUP"
+            return existing.copy(
+                host = host,
+                port = port,
+                shareName = share,
+                authMode = authMode,
+                username = user,
+                workgroup = workgroup
+            )
+        }
     }
 }
 
@@ -91,7 +133,14 @@ data class SmbRemoteEntry(
     val isDirectory: Boolean,
     val sizeBytes: Long,
     val lastModifiedMillis: Long
-)
+) {
+    val isPreviewableImage: Boolean
+        get() {
+            if (isDirectory) return false
+            val ext = name.substringAfterLast('.', "").lowercase()
+            return ext in setOf("jpg", "jpeg", "png", "webp", "bmp", "heic", "heif")
+        }
+}
 
 data class DiscoveredSmbHost(
     val label: String,

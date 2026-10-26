@@ -1,15 +1,21 @@
 package com.pixelnas.household.ui
 
+import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
 import android.net.Uri
+import android.os.Build
+import android.provider.MediaStore
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -17,11 +23,14 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -51,6 +60,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
@@ -80,10 +90,23 @@ fun HouseholdMainScreen(
     val transfer by viewModel.transferFlow.collectAsState()
     val recentUploads by viewModel.recentUploadsFlow.collectAsState()
     val browser by viewModel.browserState.collectAsState()
+    val preview by viewModel.previewState.collectAsState()
 
     var selectedTab by remember { mutableIntStateOf(0) }
     var customProfileInput by remember { mutableStateOf("") }
     var newFolderInput by remember { mutableStateOf("") }
+
+    val trashSyncedLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartIntentSenderForResult()
+    ) { res ->
+        if (res.resultCode == Activity.RESULT_OK) {
+            Toast.makeText(
+                context,
+                "Moved backed-up Camera Roll items to Android Trash (30-day recovery)!",
+                Toast.LENGTH_LONG
+            ).show()
+        }
+    }
 
     val mediaPicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickMultipleVisualMedia(100)
@@ -271,11 +294,15 @@ fun HouseholdMainScreen(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
 
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Row(
+                                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
                                 listOf(
                                     "StorageSaver" to "Saver ≤16MP",
                                     "Original" to "Original",
-                                    "Family" to "Family"
+                                    "Family" to "Family",
+                                    "PublicShare" to "PublicShare (No GPS)"
                                 ).forEach { (folder, label) ->
                                     FilterChip(
                                         selected = cfg.targetProfileFolder.equals(folder, ignoreCase = true),
@@ -364,19 +391,87 @@ fun HouseholdMainScreen(
                                 )
                             }
 
-                            Button(
-                                onClick = {
-                                    val pinned = HouseholdUploadWidgetProvider.requestPinWidget(context)
-                                    if (!pinned) {
-                                        Toast.makeText(
-                                            context,
-                                            "Long-press Home Screen → Widgets → Household Samba NAS Upload",
-                                            Toast.LENGTH_LONG
-                                        ).show()
+                            if (cfg.autoCameraSyncWifiOnly) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(Modifier.weight(1f)) {
+                                        Text("Sync While Charging Only", fontWeight = FontWeight.Medium)
+                                        Text(
+                                            "Wait until phone is plugged into a charger before running background sync",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
                                     }
+                                    Switch(
+                                        checked = cfg.syncChargingOnly,
+                                        onCheckedChange = { enabled ->
+                                            viewModel.updateConfig { it.copy(syncChargingOnly = enabled) }
+                                        }
+                                    )
                                 }
-                            ) {
-                                Text("Pin Samba Upload Widget to Home Screen")
+
+                                OutlinedTextField(
+                                    value = cfg.trustedSubnetPrefix,
+                                    onValueChange = { sub ->
+                                        viewModel.updateConfig { it.copy(trustedSubnetPrefix = sub) }
+                                    },
+                                    label = { Text("Trusted Home Subnet Filter (optional, e.g. 192.168.1.)") },
+                                    singleLine = true,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            }
+
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(
+                                    modifier = Modifier.weight(1f),
+                                    onClick = {
+                                        val pinned = HouseholdUploadWidgetProvider.requestPinWidget(context)
+                                        if (!pinned) {
+                                            Toast.makeText(
+                                                context,
+                                                "Long-press Home Screen → Widgets → Household Samba NAS Upload",
+                                                Toast.LENGTH_LONG
+                                            ).show()
+                                        }
+                                    }
+                                ) {
+                                    Text("Pin Widget")
+                                }
+                                OutlinedButton(
+                                    modifier = Modifier.weight(1f),
+                                    onClick = {
+                                        onRequestMediaPermissions()
+                                        viewModel.findSyncedCameraRollUris { uris ->
+                                            if (uris.isEmpty()) {
+                                                Toast.makeText(
+                                                    context,
+                                                    "No already-synced local Camera Roll items found to free.",
+                                                    Toast.LENGTH_SHORT
+                                                ).show()
+                                            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                                                val pi = MediaStore.createTrashRequest(
+                                                    context.contentResolver,
+                                                    uris,
+                                                    true
+                                                )
+                                                trashSyncedLauncher.launch(
+                                                    IntentSenderRequest.Builder(pi.intentSender).build()
+                                                )
+                                            } else {
+                                                Toast.makeText(
+                                                    context,
+                                                    "${uris.size} synced item(s) verified on NAS — clear from Gallery when ready.",
+                                                    Toast.LENGTH_LONG
+                                                ).show()
+                                            }
+                                        }
+                                    }
+                                ) {
+                                    Text("Free Phone Space")
+                                }
                             }
                         }
                     }
@@ -509,8 +604,12 @@ fun HouseholdMainScreen(
                     Card(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable(enabled = entry.isDirectory) {
-                                viewModel.refreshBrowser(entry.relativePath)
+                            .clickable(enabled = entry.isDirectory || entry.isPreviewableImage) {
+                                if (entry.isDirectory) {
+                                    viewModel.refreshBrowser(entry.relativePath)
+                                } else if (entry.isPreviewableImage) {
+                                    viewModel.openRemotePreview(entry)
+                                }
                             },
                         shape = RoundedCornerShape(12.dp)
                     ) {
@@ -523,19 +622,49 @@ fun HouseholdMainScreen(
                         ) {
                             Column(Modifier.weight(1f)) {
                                 Text(
-                                    (if (entry.isDirectory) "📁 " else "🖼 ") + entry.name,
+                                    (if (entry.isDirectory) "📁 " else if (entry.isPreviewableImage) "🖼 " else "🎬 ") + entry.name,
                                     fontWeight = FontWeight.Medium
                                 )
                                 Text(
                                     if (entry.isDirectory) "Samba Folder · Tap to open"
-                                    else "${formatSize(entry.sizeBytes)} · ${formatTimestamp(entry.lastModifiedMillis)}",
+                                    else "${formatSize(entry.sizeBytes)} · ${formatTimestamp(entry.lastModifiedMillis)}" +
+                                        (if (entry.isPreviewableImage) " · Tap to preview" else ""),
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
                             if (!entry.isDirectory) {
-                                TextButton(onClick = { viewModel.deleteRemoteEntry(entry) }) {
-                                    Text("Delete")
+                                Row {
+                                    TextButton(
+                                        onClick = {
+                                            viewModel.saveRemoteFileToDevice(entry) { _, msg ->
+                                                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                                            }
+                                        }
+                                    ) {
+                                        Text("Save")
+                                    }
+                                    TextButton(
+                                        onClick = {
+                                            viewModel.shareRemoteFile(entry) { uri, mime, err ->
+                                                if (uri != null) {
+                                                    val send = Intent(Intent.ACTION_SEND).apply {
+                                                        type = mime
+                                                        putExtra(Intent.EXTRA_STREAM, uri)
+                                                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                                    }
+                                                    context.startActivity(Intent.createChooser(send, "Share ${entry.name}"))
+                                                } else {
+                                                    Toast.makeText(context, err ?: "Share failed", Toast.LENGTH_SHORT).show()
+                                                }
+                                            }
+                                        }
+                                    ) {
+                                        Text("Share")
+                                    }
+                                    TextButton(onClick = { viewModel.deleteRemoteEntry(entry) }) {
+                                        Text("Del")
+                                    }
                                 }
                             }
                         }
@@ -565,19 +694,38 @@ fun HouseholdMainScreen(
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
-                            Button(
-                                onClick = {
-                                    viewModel.scanWifiForNas { count ->
-                                        Toast.makeText(
-                                            context,
-                                            if (count > 0) "Found $count Samba share(s) on Wi-Fi!"
-                                            else "No Samba server auto-detected — enter IP below",
-                                            Toast.LENGTH_SHORT
-                                        ).show()
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(
+                                    onClick = {
+                                        viewModel.scanWifiForNas { count ->
+                                            Toast.makeText(
+                                                context,
+                                                if (count > 0) "Found $count Samba share(s) on Wi-Fi!"
+                                                else "No Samba server auto-detected — enter IP below",
+                                                Toast.LENGTH_SHORT
+                                            ).show()
+                                        }
                                     }
+                                ) {
+                                    Text(if (scanning) "Scanning..." else "Scan Wi-Fi")
                                 }
-                            ) {
-                                Text(if (scanning) "Scanning Home Wi-Fi..." else "Scan Wi-Fi for Samba NAS")
+                                OutlinedButton(
+                                    onClick = {
+                                        val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                        val clipText = cm.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString().orEmpty()
+                                        if (viewModel.applyPairingUri(clipText)) {
+                                            Toast.makeText(context, "Paired from clipboard link!", Toast.LENGTH_SHORT).show()
+                                        } else {
+                                            Toast.makeText(
+                                                context,
+                                                "Copy a pixelnas://pair?... link from your NAS first",
+                                                Toast.LENGTH_LONG
+                                            ).show()
+                                        }
+                                    }
+                                ) {
+                                    Text("Paste Pair Link")
+                                }
                             }
 
                             discovered.forEach { host ->
@@ -724,6 +872,82 @@ fun HouseholdMainScreen(
                 item { Spacer(Modifier.height(16.dp)) }
             }
         }
+    }
+
+    val activePreview = preview.entry
+    if (activePreview != null) {
+        AlertDialog(
+            onDismissRequest = { viewModel.closeRemotePreview() },
+            title = { Text(activePreview.name, maxLines = 1) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    when {
+                        preview.loading -> {
+                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                            Text("Streaming preview over Samba SMB2...")
+                        }
+                        preview.bitmap != null -> {
+                            Image(
+                                bitmap = preview.bitmap!!.asImageBitmap(),
+                                contentDescription = activePreview.name,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(max = 320.dp)
+                                    .clip(RoundedCornerShape(12.dp)),
+                                contentScale = ContentScale.Fit
+                            )
+                            Text(
+                                "${formatSize(activePreview.sizeBytes)} · ${activePreview.relativePath}",
+                                style = MaterialTheme.typography.bodySmall,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
+                        else -> {
+                            Text(
+                                preview.error.ifBlank { "Unable to preview file" },
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        viewModel.saveRemoteFileToDevice(activePreview) { _, msg ->
+                            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                ) {
+                    Text("Save to Gallery")
+                }
+            },
+            dismissButton = {
+                Row {
+                    TextButton(
+                        onClick = {
+                            viewModel.shareRemoteFile(activePreview) { uri, mime, err ->
+                                if (uri != null) {
+                                    val send = Intent(Intent.ACTION_SEND).apply {
+                                        type = mime
+                                        putExtra(Intent.EXTRA_STREAM, uri)
+                                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                    }
+                                    context.startActivity(Intent.createChooser(send, "Share ${activePreview.name}"))
+                                } else {
+                                    Toast.makeText(context, err ?: "Share failed", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        }
+                    ) {
+                        Text("Share")
+                    }
+                    TextButton(onClick = { viewModel.closeRemotePreview() }) {
+                        Text("Close")
+                    }
+                }
+            }
+        )
     }
 }
 

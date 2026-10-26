@@ -26,6 +26,8 @@ except Exception:
 
 from server.config import NasSettings, sanitize_folder_segment
 from server.database import HistoryDatabase
+from server.motion_photo import attach_motion_mp4_to_jpeg, extract_motion_photo_mp4
+from server.perceptual_hash import compute_dhash_hex, estimate_sharpness
 
 PHOTO_EXTENSIONS = {
     ".jpg",
@@ -266,6 +268,7 @@ def build_enriched_exif_bytes(
     raw_exif_bytes: Optional[bytes],
     takeout_meta: Dict,
     fallback_dt_str: Optional[str],
+    strip_gps: bool = False,
 ) -> Tuple[Optional[bytes], str]:
     notes = []
     try:
@@ -303,20 +306,58 @@ def build_enriched_exif_bytes(
             exif_dict["0th"][piexif.ImageIFD.DateTime] = dt_bytes
             notes.append("Filename Date")
 
-    has_gps = bool(exif_dict["GPS"].get(piexif.GPSIFD.GPSLatitude))
-    if not has_gps and "lat" in takeout_meta and "lon" in takeout_meta:
-        lat = takeout_meta["lat"]
-        lon = takeout_meta["lon"]
-        exif_dict["GPS"][piexif.GPSIFD.GPSLatitudeRef] = b"N" if lat >= 0 else b"S"
-        exif_dict["GPS"][piexif.GPSIFD.GPSLatitude] = _deg_to_dms_rational(lat)
-        exif_dict["GPS"][piexif.GPSIFD.GPSLongitudeRef] = b"E" if lon >= 0 else b"W"
-        exif_dict["GPS"][piexif.GPSIFD.GPSLongitude] = _deg_to_dms_rational(lon)
-        notes.append("Takeout GPS")
+    if strip_gps:
+        had_gps = bool(exif_dict.get("GPS"))
+        exif_dict["GPS"] = {}
+        for tag in (
+            piexif.ExifIFD.BodySerialNumber,
+            piexif.ExifIFD.LensSerialNumber,
+            piexif.ExifIFD.CameraOwnerName,
+        ):
+            exif_dict["Exif"].pop(tag, None)
+        for tag in (piexif.ImageIFD.Artist, piexif.ImageIFD.XPAuthor):
+            exif_dict["0th"].pop(tag, None)
+        if had_gps or "lat" in takeout_meta:
+            notes.append("GPS Stripped")
+        else:
+            notes.append("Privacy Scrubbed")
+    else:
+        has_gps = bool(exif_dict["GPS"].get(piexif.GPSIFD.GPSLatitude))
+        if not has_gps and "lat" in takeout_meta and "lon" in takeout_meta:
+            lat = takeout_meta["lat"]
+            lon = takeout_meta["lon"]
+            exif_dict["GPS"][piexif.GPSIFD.GPSLatitudeRef] = b"N" if lat >= 0 else b"S"
+            exif_dict["GPS"][piexif.GPSIFD.GPSLatitude] = _deg_to_dms_rational(lat)
+            exif_dict["GPS"][piexif.GPSIFD.GPSLongitudeRef] = b"E" if lon >= 0 else b"W"
+            exif_dict["GPS"][piexif.GPSIFD.GPSLongitude] = _deg_to_dms_rational(lon)
+            notes.append("Takeout GPS")
 
     has_any = bool(exif_dict["Exif"] or exif_dict["GPS"] or len(exif_dict["0th"]) > 1)
-    if not has_any:
+    if not has_any and not strip_gps:
         return None, ""
     return piexif.dump(exif_dict), " + ".join(notes)
+
+
+def normalize_wide_gamut_to_srgb(
+    im_rgb: Image.Image, icc_bytes: Optional[bytes]
+) -> Tuple[Image.Image, bool]:
+    if not icc_bytes:
+        return im_rgb, False
+    try:
+        import io as _io
+        from PIL import ImageCms
+
+        src_profile = ImageCms.ImageCmsProfile(_io.BytesIO(icc_bytes))
+        desc = (ImageCms.getProfileDescription(src_profile) or "").lower()
+        if "srgb" in desc:
+            return im_rgb, False
+        dst_profile = ImageCms.createProfile("sRGB")
+        converted = ImageCms.profileToProfile(
+            im_rgb, src_profile, dst_profile, outputMode="RGB"
+        )
+        return converted, True
+    except Exception:
+        return im_rgb, False
 
 
 def probe_video_info(path: Path) -> Tuple[int, int, str]:
@@ -429,6 +470,7 @@ def inspect_media_file(path: Path, root_dir: Optional[Path] = None) -> Dict:
                 info["height"] = h
                 info["megapixels"] = round((w * h) / 1_000_000.0, 2)
                 info.update(inspect_photo_exif(raw_exif))
+                info["has_motion_video"] = bool(extract_motion_photo_mp4(path))
         except Exception:
             pass
     elif ext in VIDEO_EXTENSIONS:
@@ -469,17 +511,39 @@ def process_media_file(
         rel_parts = ()
 
     remaining_album_parts = rel_parts
+    strip_gps_effective = bool(settings.strip_gps_globally)
     if rel_parts:
         matched_prof = settings.match_folder_profile(rel_parts[0])
         if matched_prof is not None:
-            profile_name = str(matched_prof["name"])
+            base_prof_name = str(matched_prof.get("folder_name") or matched_prof.get("name") or "")
+            profile_name = base_prof_name
+            if len(rel_parts) >= 2 and not rel_parts[1].endswith("_unpacked"):
+                profile_name = f"{base_prof_name}/{rel_parts[1]}"
             effective_settings.storage_saver_enabled = (
                 matched_prof.get("mode") != "original_passthrough"
             )
+            effective_settings.max_megapixels = float(
+                matched_prof.get("max_megapixels", settings.max_megapixels)
+            )
+            effective_settings.jpeg_quality = int(
+                matched_prof.get("jpeg_quality", settings.jpeg_quality)
+            )
+            effective_settings.compress_videos = bool(
+                matched_prof.get("compress_videos", effective_settings.storage_saver_enabled)
+            )
+            if bool(matched_prof.get("strip_gps", base_prof_name.lower() == "publicshare")):
+                strip_gps_effective = True
             out_sub = sanitize_folder_segment(str(matched_prof.get("output_subfolder", "")))
             if out_sub:
                 effective_settings.output_dir = str(base_output_dir / out_sub)
-            remaining_album_parts = rel_parts[1:]
+            remaining_album_parts = tuple(
+                p for p in rel_parts[1:] if not p.endswith("_unpacked")
+            )
+        else:
+            remaining_album_parts = tuple(
+                p for p in rel_parts if not p.endswith("_unpacked")
+            )
+    effective_settings.strip_gps_globally = strip_gps_effective
 
     target_output_dir = Path(effective_settings.output_dir).expanduser().resolve()
     target_output_dir.mkdir(parents=True, exist_ok=True)
@@ -504,9 +568,23 @@ def process_media_file(
         effective_mtime = parsed_fn[1]
 
     # Validate file integrity FIRST so corrupted transfers go to Quarantine instead of seen_hashes!
+    computed_dhash = ""
+    computed_sharpness = 0.0
     if ext in PHOTO_EXTENSIONS:
         with Image.open(source_path) as check_src:
             check_src.load()
+            if effective_settings.perceptual_dedup_enabled and db is not None:
+                computed_dhash = compute_dhash_hex(check_src)
+                computed_sharpness = estimate_sharpness(check_src)
+            if not takeout_meta.get("timestamp") and not parsed_fn:
+                exif_dt = inspect_photo_exif(check_src.info.get("exif")).get("date_taken", "")
+                if len(exif_dt) >= 19:
+                    try:
+                        effective_mtime = dt_mod.datetime.strptime(
+                            exif_dt[:19], "%Y:%m:%d %H:%M:%S"
+                        ).timestamp()
+                    except Exception:
+                        pass
     elif ext in VIDEO_EXTENSIONS and get_ffmpeg_binary() is not None:
         vw, vh, _ = probe_video_info(source_path)
         if vw <= 0 or vh <= 0:
@@ -550,6 +628,54 @@ def process_media_file(
                 "status": "completed",
                 "created_at": time.time(),
             }
+
+    if (
+        computed_dhash
+        and effective_settings.perceptual_dedup_enabled
+        and db is not None
+    ):
+        near_dup = db.find_near_duplicate_dhash(
+            computed_dhash, effective_settings.perceptual_hamming_threshold
+        )
+        if near_dup is not None:
+            deleted = False
+            if effective_settings.delete_originals:
+                source_path.unlink(missing_ok=True)
+                if sidecar_path and sidecar_path.exists():
+                    sidecar_path.unlink(missing_ok=True)
+                deleted = not source_path.exists()
+            return {
+                "original_filename": source_path.name,
+                "output_filename": near_dup["output_filename"],
+                "output_path": str(base_output_dir / near_dup["output_filename"]),
+                "media_type": "photo",
+                "mode": "duplicate_skipped",
+                "profile_name": profile_name,
+                "orig_width": 0,
+                "orig_height": 0,
+                "orig_mp": 0.0,
+                "orig_bytes": orig_bytes,
+                "out_width": 0,
+                "out_height": 0,
+                "out_mp": 0.0,
+                "out_bytes": 0,
+                "saved_bytes": orig_bytes,
+                "saved_pct": 100.0,
+                "exif_preserved": True,
+                "camera_model": "",
+                "date_taken": "",
+                "gps_coords": "",
+                "metadata_note": f"Near-Duplicate Skipped (dHash Δ={near_dup['distance']})",
+                "original_deleted": deleted,
+                "duration_ms": int((time.perf_counter() - t0) * 1000),
+                "status": "completed",
+                "created_at": time.time(),
+            }
+
+    if effective_settings.organize_by_date:
+        cap_dt = dt_mod.datetime.fromtimestamp(max(0.0, effective_mtime))
+        target_output_dir = target_output_dir / f"{cap_dt:%Y}" / f"{cap_dt:%Y-%m}"
+        target_output_dir.mkdir(parents=True, exist_ok=True)
 
     output_stem = source_path.stem
     if effective_settings.prefix_subfolder_name and remaining_album_parts:
@@ -596,6 +722,8 @@ def process_media_file(
 
     if db is not None:
         db.record_hash(file_hash, rel_out_name)
+        if computed_dhash and effective_settings.perceptual_dedup_enabled:
+            db.record_dhash(computed_dhash, rel_out_name, computed_sharpness)
 
     original_deleted = False
     if effective_settings.delete_originals and source_path.exists():
@@ -634,12 +762,29 @@ def _process_photo(
     fallback_dt_str: Optional[str],
     settings: NasSettings,
 ) -> Dict:
+    motion_mp4 = (
+        extract_motion_photo_mp4(source_path)
+        if settings.preserve_motion_photos
+        else None
+    )
     with Image.open(source_path) as raw_im:
         raw_exif = raw_im.info.get("exif")
+        raw_icc = raw_im.info.get("icc_profile")
+        strip_gps = bool(settings.strip_gps_globally)
         enriched_exif, meta_note = build_enriched_exif_bytes(
-            raw_exif, takeout_meta, fallback_dt_str
+            raw_exif, takeout_meta, fallback_dt_str, strip_gps=strip_gps
         )
-        exif_meta = inspect_photo_exif(enriched_exif or raw_exif)
+        exif_meta = inspect_photo_exif(
+            enriched_exif if strip_gps else (enriched_exif or raw_exif)
+        )
+        if exif_meta.get("date_taken") and settings.organize_by_date:
+            try:
+                dt_parsed = dt_mod.datetime.strptime(
+                    exif_meta["date_taken"][:19], "%Y:%m:%d %H:%M:%S"
+                )
+                effective_mtime = dt_parsed.timestamp()
+            except Exception:
+                pass
 
         if not settings.storage_saver_enabled:
             im_oriented = ImageOps.exif_transpose(raw_im)
@@ -649,9 +794,12 @@ def _process_photo(
             )
             tmp_out = output_dir / f".converting_{uuid.uuid4().hex}{source_path.suffix}"
             try:
-                if meta_note and source_path.suffix.lower() in (".jpg", ".jpeg") and enriched_exif:
+                if (meta_note or strip_gps) and source_path.suffix.lower() in (".jpg", ".jpeg") and enriched_exif is not None:
                     shutil.copy2(source_path, tmp_out)
-                    piexif.insert(enriched_exif, str(tmp_out))
+                    if strip_gps:
+                        piexif.remove(str(tmp_out))
+                    if enriched_exif:
+                        piexif.insert(enriched_exif, str(tmp_out))
                 else:
                     shutil.copy2(source_path, tmp_out)
                 os.replace(tmp_out, final_path)
@@ -695,6 +843,12 @@ def _process_photo(
         else:
             im_rgb = im
 
+        converted_srgb = False
+        if settings.normalize_srgb and raw_icc:
+            im_rgb, converted_srgb = normalize_wide_gamut_to_srgb(im_rgb, raw_icc)
+            if converted_srgb:
+                meta_note = f"{meta_note} + sRGB".strip(" +")
+
         im_out = (
             im_rgb.resize((target_w, target_h), Image.Resampling.LANCZOS)
             if was_resized
@@ -703,6 +857,7 @@ def _process_photo(
 
         final_path = resolve_unique_output_path(output_dir, output_stem, ".jpg")
         tmp_out = output_dir / f".converting_{uuid.uuid4().hex}.jpg"
+        copied_source_verbatim = False
         try:
             save_kwargs = {
                 "format": "JPEG",
@@ -717,16 +872,26 @@ def _process_photo(
 
             if (
                 not was_resized
+                and not strip_gps
+                and not converted_srgb
                 and settings.avoid_recompressing_small_jpegs
                 and source_path.suffix.lower() in (".jpg", ".jpeg")
                 and tmp_out.stat().st_size >= orig_bytes
             ):
                 shutil.copy2(source_path, tmp_out)
+                copied_source_verbatim = True
                 if meta_note and enriched_exif:
                     piexif.insert(enriched_exif, str(tmp_out))
 
             with Image.open(tmp_out) as check_im:
                 check_im.verify()
+
+            if motion_mp4 and not copied_source_verbatim:
+                attached, _ = attach_motion_mp4_to_jpeg(tmp_out, motion_mp4)
+                if attached:
+                    meta_note = f"{meta_note} + Motion Photo Preserved".strip(" +")
+            elif motion_mp4 and copied_source_verbatim:
+                meta_note = f"{meta_note} + Motion Photo Preserved".strip(" +")
 
             os.replace(tmp_out, final_path)
         finally:

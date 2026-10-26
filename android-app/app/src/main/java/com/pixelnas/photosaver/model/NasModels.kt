@@ -17,6 +17,7 @@ data class FolderProfileRule(
     val maxMegapixels: Double = 16.0,
     val jpegQuality: Int = 85,
     val compressVideos: Boolean = true,
+    val stripGps: Boolean = false,
     val outputSubfolder: String = ""
 )
 
@@ -27,6 +28,7 @@ fun defaultFolderProfiles(): List<FolderProfileRule> = listOf(
         maxMegapixels = 16.0,
         jpegQuality = 85,
         compressVideos = true,
+        stripGps = false,
         outputSubfolder = ""
     ),
     FolderProfileRule(
@@ -35,6 +37,7 @@ fun defaultFolderProfiles(): List<FolderProfileRule> = listOf(
         maxMegapixels = 16.0,
         jpegQuality = 95,
         compressVideos = false,
+        stripGps = false,
         outputSubfolder = ""
     ),
     FolderProfileRule(
@@ -43,7 +46,17 @@ fun defaultFolderProfiles(): List<FolderProfileRule> = listOf(
         maxMegapixels = 16.0,
         jpegQuality = 85,
         compressVideos = true,
+        stripGps = false,
         outputSubfolder = "Family"
+    ),
+    FolderProfileRule(
+        folderName = "PublicShare",
+        storageSaverEnabled = true,
+        maxMegapixels = 16.0,
+        jpegQuality = 85,
+        compressVideos = true,
+        stripGps = true,
+        outputSubfolder = "PublicShare"
     )
 )
 
@@ -60,6 +73,19 @@ data class NasConfig(
     val recursiveSubfolders: Boolean = true,
     val restoreExifFromFilename: Boolean = true,
     val mergeTakeoutJson: Boolean = true,
+    val preserveMotionPhotos: Boolean = true,
+    val normalizeSrgb: Boolean = true,
+    val stripGpsGlobally: Boolean = false,
+    val organizeByDate: Boolean = false,
+    val perceptualDedupEnabled: Boolean = false,
+    val perceptualHammingThreshold: Int = 6,
+    val extractTakeoutZips: Boolean = true,
+    val quietHoursEnabled: Boolean = false,
+    val quietHoursStart: Int = 23,
+    val quietHoursEnd: Int = 7,
+    val webhookUrl: String = "",
+    val webhookOnQuarantine: Boolean = true,
+    val webhookOnLowStorage: Boolean = true,
     val quarantineEnabled: Boolean = true,
     val quarantineMaxRetries: Int = 2,
     val autoPurgeOutputDays: Int = 0,
@@ -95,7 +121,34 @@ data class NasConfig(
             null
         }
     }
+
+    fun buildPairingUri(lanIp: String, activeSmbPort: Int = smbPort): String {
+        val enc = { s: String -> java.net.URLEncoder.encode(s, "UTF-8") }
+        val share = smbShareName.ifBlank { "PixelNAS" }
+        val auth = if (authEnabled) "credentials" else "guest"
+        val user = authUsername.ifBlank { "pixel" }
+        return "pixelnas://pair?host=${enc(lanIp.trim())}&port=$activeSmbPort&share=${enc(share)}&auth=$auth&user=${enc(user)}&workgroup=WORKGROUP"
+    }
+
+    companion object {
+        fun isWithinQuietHours(nowHour: Int, startHour: Int, endHour: Int): Boolean {
+            val s = ((startHour % 24) + 24) % 24
+            val e = ((endHour % 24) + 24) % 24
+            val h = ((nowHour % 24) + 24) % 24
+            if (s == e) return true
+            return if (s < e) h in s until e else (h >= s || h < e)
+        }
+    }
 }
+
+data class MemberAnalyticsItem(
+    val member: String,
+    val fileCount: Int,
+    val origBytes: Long,
+    val outBytes: Long,
+    val savedBytes: Long,
+    val savedPct: Double
+)
 
 data class QuarantineItem(
     val quarantineName: String,
@@ -154,8 +207,11 @@ data class WorkerRuntimeState(
     val activeFile: String? = null,
     val batteryTempCelsius: Float = 28.0f,
     val batteryLevelPct: Int = 100,
+    val acPluggedIn: Boolean = true,
+    val batterySwellWarning: Boolean = false,
     val thermalPaused: Boolean = false,
     val autoPurgedCount: Int = 0,
+    val deferredVideoCount: Int = 0,
     val quarantinedTotal: Int = 0,
     val lastError: String = ""
 )

@@ -77,14 +77,17 @@ fun MainScreen(
     val cfg by viewModel.configFlow.collectAsState()
     val runtime by viewModel.runtimeFlow.collectAsState()
     val summary by viewModel.summaryFlow.collectAsState()
+    val members by viewModel.memberFlow.collectAsState()
     val history by viewModel.recentHistoryFlow.collectAsState()
     val telemetry by viewModel.telemetry.collectAsState()
 
     var oledShieldActive by remember { mutableStateOf(false) }
     var pixelShiftStep by remember { mutableIntStateOf(0) }
+    var showPairingQr by remember { mutableStateOf(true) }
     var newRuleFolder by remember { mutableStateOf("") }
     var newRuleOutSub by remember { mutableStateOf("") }
     var newRuleSaver by remember { mutableStateOf(true) }
+    var newRuleStripGps by remember { mutableStateOf(false) }
 
     LaunchedEffect(oledShieldActive) {
         while (oledShieldActive) {
@@ -103,6 +106,7 @@ fun MainScreen(
     }
     val webDavUrl = "$webPortalUrl/webdav/Incoming/StorageSaver/"
     val ftpUrl = "ftp://${telemetry.lanIp}:${cfg.ftpPort}/Incoming/"
+    val pairingUri = cfg.buildPairingUri(telemetry.lanIp)
 
     if (oledShieldActive) {
         val dy = ((pixelShiftStep - 2) * 28).dp
@@ -153,8 +157,9 @@ fun MainScreen(
         return
     }
 
-    val qrBitmap = remember(webPortalUrl) {
-        PixelDeviceDetector.renderQrBitmap(webPortalUrl, 300).asImageBitmap()
+    val qrPayload = if (showPairingQr) pairingUri else webPortalUrl
+    val qrBitmap = remember(qrPayload) {
+        PixelDeviceDetector.renderQrBitmap(qrPayload, 300).asImageBitmap()
     }
 
     val incomingFolderPicker = rememberLauncherForActivityResult(
@@ -277,9 +282,9 @@ fun MainScreen(
                                     fontWeight = FontWeight.Bold
                                 )
                                 Text(
-                                    "Battery ${runtime.batteryLevelPct}% (${runtime.batteryTempCelsius}°C) · Free ${formatBytes(telemetry.freeBytes)} / ${formatBytes(telemetry.totalBytes)}",
+                                    "Battery ${runtime.batteryLevelPct}% (${runtime.batteryTempCelsius}°C${if (!runtime.acPluggedIn) " · Unplugged!" else if (runtime.batterySwellWarning) " · Warm Trickle!" else ""}) · Free ${formatBytes(telemetry.freeBytes)} / ${formatBytes(telemetry.totalBytes)}",
                                     style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    color = if (runtime.batterySwellWarning || !runtime.acPluggedIn) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
                             Switch(
@@ -310,7 +315,20 @@ fun MainScreen(
                             }
                         }
 
-                        Spacer(Modifier.height(12.dp))
+                        Spacer(Modifier.height(10.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            FilterChip(
+                                selected = showPairingQr,
+                                onClick = { showPairingQr = true },
+                                label = { Text("Household Pairing QR") }
+                            )
+                            FilterChip(
+                                selected = !showPairingQr,
+                                onClick = { showPairingQr = false },
+                                label = { Text("Web UI QR") }
+                            )
+                        }
+                        Spacer(Modifier.height(8.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Button(
                                 onClick = {
@@ -320,9 +338,9 @@ fun MainScreen(
                                 Text("Open Web UI")
                             }
                             OutlinedButton(
-                                onClick = { copyText(context, smbShareUrl, "Copied Samba Share URL") }
+                                onClick = { copyText(context, pairingUri, "Copied 1-Tap Pairing Link") }
                             ) {
-                                Text("Copy Samba URL")
+                                Text("Copy Pair Link")
                             }
                         }
                     }
@@ -429,17 +447,56 @@ fun MainScreen(
                         )
 
                         ToggleSettingRow(
-                            title = "Smart EXIF Repair + Takeout JSON + SHA-256 Dedup",
-                            subtitle = "Rebuilds WhatsApp/Android EXIF dates, merges Takeout .json GPS/dates & skips duplicates",
+                            title = "Smart EXIF + Takeout .zip/.json + SHA-256 Dedup",
+                            subtitle = "Auto-extracts Takeout .zip drops, rebuilds WhatsApp dates & skips duplicates",
                             checked = cfg.restoreExifFromFilename && cfg.mergeTakeoutJson,
                             onCheckedChange = { enabled ->
                                 viewModel.updateConfig {
                                     it.copy(
                                         skipDuplicates = enabled,
                                         restoreExifFromFilename = enabled,
-                                        mergeTakeoutJson = enabled
+                                        mergeTakeoutJson = enabled,
+                                        extractTakeoutZips = enabled
                                     )
                                 }
+                            }
+                        )
+
+                        ToggleSettingRow(
+                            title = "Preserve Pixel Motion Photos & Wide-Gamut sRGB",
+                            subtitle = "Keeps embedded MP4 motion clips intact on resized <=16 MP JPEGs & converts P3 to sRGB",
+                            checked = cfg.preserveMotionPhotos,
+                            onCheckedChange = { enabled ->
+                                viewModel.updateConfig {
+                                    it.copy(preserveMotionPhotos = enabled, normalizeSrgb = enabled)
+                                }
+                            }
+                        )
+
+                        ToggleSettingRow(
+                            title = "Perceptual Burst & Near-Duplicate Guard (64-bit dHash)",
+                            subtitle = "Skips re-encoded WhatsApp copies & near-identical camera burst frames",
+                            checked = cfg.perceptualDedupEnabled,
+                            onCheckedChange = { enabled ->
+                                viewModel.updateConfig { it.copy(perceptualDedupEnabled = enabled) }
+                            }
+                        )
+
+                        ToggleSettingRow(
+                            title = "Auto-Sort Output by Capture Date (YYYY/YYYY-MM)",
+                            subtitle = "Organizes converted files into chronological year/month subfolders",
+                            checked = cfg.organizeByDate,
+                            onCheckedChange = { enabled ->
+                                viewModel.updateConfig { it.copy(organizeByDate = enabled) }
+                            }
+                        )
+
+                        ToggleSettingRow(
+                            title = "Quiet-Hours 4K Video Schedule (${cfg.quietHoursStart}:00–0${cfg.quietHoursEnd}:00)",
+                            subtitle = "Photos convert 24/7; heavy 4K video transcodes run overnight (${runtime.deferredVideoCount} deferred)",
+                            checked = cfg.quietHoursEnabled,
+                            onCheckedChange = { enabled ->
+                                viewModel.updateConfig { it.copy(quietHoursEnabled = enabled) }
                             }
                         )
 
@@ -527,7 +584,7 @@ fun MainScreen(
                                             "DCIM/PixelNAS"
                                         }
                                         Text(
-                                            "${if (rule.storageSaverEnabled) "≤16 MP Saver" else "100% Original"} → $destTxt",
+                                            "${if (rule.storageSaverEnabled) "≤16 MP Saver" else "100% Original"}${if (rule.stripGps) " · GPS Stripped" else ""} → $destTxt",
                                             style = MaterialTheme.typography.bodySmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
@@ -556,24 +613,79 @@ fun MainScreen(
                         )
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                             FilterChip(
-                                selected = newRuleSaver,
-                                onClick = { newRuleSaver = true },
-                                label = { Text("Storage Saver ≤16MP") }
+                                selected = newRuleSaver && !newRuleStripGps,
+                                onClick = { newRuleSaver = true; newRuleStripGps = false },
+                                label = { Text("Saver") }
+                            )
+                            FilterChip(
+                                selected = newRuleSaver && newRuleStripGps,
+                                onClick = { newRuleSaver = true; newRuleStripGps = true },
+                                label = { Text("Strip GPS") }
                             )
                             FilterChip(
                                 selected = !newRuleSaver,
-                                onClick = { newRuleSaver = false },
-                                label = { Text("Original 100%") }
+                                onClick = { newRuleSaver = false; newRuleStripGps = false },
+                                label = { Text("Original") }
                             )
                             Button(
                                 onClick = {
-                                    viewModel.addFolderProfile(newRuleFolder, newRuleSaver, newRuleOutSub)
+                                    viewModel.addFolderProfile(newRuleFolder, newRuleSaver, newRuleOutSub, newRuleStripGps)
                                     newRuleFolder = ""
                                     newRuleOutSub = ""
                                 }
                             ) {
                                 Text("+ Add")
                             }
+                        }
+                    }
+                }
+            }
+
+            // Card 4b: Per-Member Analytics & 24/7 Health Guard Webhook
+            item {
+                ElevatedCard(shape = RoundedCornerShape(16.dp)) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text(
+                            "Household Member Analytics & Health Webhook",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                        if (members.isEmpty()) {
+                            Text(
+                                "Per-member storage savings will appear here as family phones upload via Samba.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        } else {
+                            members.forEach { m ->
+                                Text(
+                                    "${m.member}: ${m.fileCount} files · ${formatBytes(m.origBytes)} → ${formatBytes(m.outBytes)} (-${m.savedPct}%)",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                            }
+                        }
+                        HorizontalDivider()
+                        OutlinedTextField(
+                            value = cfg.webhookUrl,
+                            onValueChange = { url -> viewModel.updateConfig { it.copy(webhookUrl = url) } },
+                            label = { Text("24/7 Alert Webhook (ntfy.sh / Discord / Slack)") },
+                            placeholder = { Text("https://ntfy.sh/my-pixel-nas") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        OutlinedButton(
+                            onClick = {
+                                viewModel.sendTestWebhook { ok, detail ->
+                                    Toast.makeText(
+                                        context,
+                                        if (ok) "Webhook delivered ($detail)" else "Webhook failed: $detail",
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                }
+                            }
+                        ) {
+                            Text("Send Test Alert")
                         }
                     }
                 }

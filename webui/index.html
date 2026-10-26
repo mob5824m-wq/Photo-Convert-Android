@@ -169,8 +169,8 @@
             </select>
           </div>
 
-          <div class="dropzone" id="uploadDropzone" tabindex="0" role="button" aria-label="Upload photos or videos">
-            <input type="file" id="fileInput" multiple accept="image/*,video/*,.heic,.heif,.avif,.mkv" hidden />
+          <div class="dropzone" id="uploadDropzone" tabindex="0" role="button" aria-label="Upload photos, videos, or Takeout zip">
+            <input type="file" id="fileInput" multiple accept="image/*,video/*,.heic,.heif,.avif,.mkv,.zip,.json" hidden />
             <div class="dropzone-icon">
               <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
@@ -178,8 +178,8 @@
                 <line x1="12" y1="3" x2="12" y2="15"></line>
               </svg>
             </div>
-            <p class="dropzone-title">Drag &amp; drop high-res Android camera photos/videos or <span class="linkish">browse files</span></p>
-            <p class="dropzone-hint">Supports 50MP–200MP JPG, PNG, HEIC, AVIF, WebP, TIFF &amp; 4K MP4/MOV/MKV</p>
+            <p class="dropzone-title">Drag &amp; drop Android photos, 4K videos, or Google Takeout <code>.zip</code> — or <span class="linkish">browse files</span></p>
+            <p class="dropzone-hint">Supports 50MP–200MP JPG/Motion Photos, PNG, HEIC, AVIF, 4K MP4/MOV/MKV &amp; direct <code>takeout-*.zip</code> archives</p>
           </div>
 
           <div class="upload-progress" id="uploadProgressWrap" hidden>
@@ -246,10 +246,34 @@
 
             <label class="toggle-row" for="toggleSmartMetadata">
               <div class="toggle-copy">
-                <span class="toggle-title">Smart EXIF Repair (WhatsApp Dates + Google Takeout JSON + SHA-256 Dedup)</span>
-                <span class="toggle-sub">Rebuilds missing EXIF dates from Android filenames, merges Takeout <code>.json</code> GPS/dates, and skips duplicate files.</span>
+                <span class="toggle-title">Smart EXIF Repair, Google Takeout <code>.zip/.json</code> &amp; SHA-256 Dedup</span>
+                <span class="toggle-sub">Auto-extracts Takeout <code>.zip</code> drops, rebuilds WhatsApp/Android dates, merges JSON GPS, and skips exact duplicates.</span>
               </div>
               <input type="checkbox" class="switch-input" id="toggleSmartMetadata" checked />
+            </label>
+
+            <label class="toggle-row" for="toggleMotionPhotos">
+              <div class="toggle-copy">
+                <span class="toggle-title">Preserve Pixel Motion Photos (<code>MVIMG</code>) &amp; Wide-Gamut <code>sRGB</code></span>
+                <span class="toggle-sub">Keeps embedded MP4 motion clips intact on resized &le;16 MP JPEGs and normalizes Display P3 / HEIC wide-gamut colors to sRGB.</span>
+              </div>
+              <input type="checkbox" class="switch-input" id="toggleMotionPhotos" checked />
+            </label>
+
+            <label class="toggle-row" for="togglePerceptualDedup">
+              <div class="toggle-copy">
+                <span class="toggle-title">Perceptual Burst &amp; Near-Duplicate Guard (<code>64-bit dHash</code>)</span>
+                <span class="toggle-sub">Detects re-encoded WhatsApp/Gallery duplicates and nearly identical burst frames even when file bytes differ.</span>
+              </div>
+              <input type="checkbox" class="switch-input" id="togglePerceptualDedup" />
+            </label>
+
+            <label class="toggle-row" for="toggleOrganizeByDate">
+              <div class="toggle-copy">
+                <span class="toggle-title">Auto-Sort Output by Capture Date (<code>YYYY/YYYY-MM</code>)</span>
+                <span class="toggle-sub">Organizes converted media into chronological year/month subfolders using EXIF / Takeout capture timestamps.</span>
+              </div>
+              <input type="checkbox" class="switch-input" id="toggleOrganizeByDate" />
             </label>
           </div>
 
@@ -275,6 +299,7 @@
           <input type="text" id="newProfileFolder" placeholder="Subfolder name (e.g. Partner, Kids, Trip2026)" required />
           <select id="newProfileMode">
             <option value="saver">Storage Saver (≤16 MP + 1080p)</option>
+            <option value="privacy">Privacy Scrubber (≤16 MP + Strip GPS)</option>
             <option value="original">Original Quality (100% Untouched)</option>
           </select>
           <input type="text" id="newProfileOutSub" placeholder="Output album subfolder (optional, e.g. Family)" />
@@ -312,6 +337,22 @@
           <div class="file-list" id="outputFileList">
             <div class="empty-state">No converted photos in Output yet. Drop photos or click "Drop Photos + Takeout + 4K Video" above!</div>
           </div>
+        </div>
+      </div>
+
+      <!-- Per-Member & Profile Storage Analytics -->
+      <div class="card section-gap">
+        <div class="card-head">
+          <div>
+            <h2>Household Member &amp; Profile Storage Analytics</h2>
+            <p class="muted">Per-member and per-profile breakdown of uploaded photos/videos, original bytes, converted output size, and space saved.</p>
+          </div>
+          <div class="card-actions">
+            <a class="btn btn-secondary btn-sm" href="/api/export-zip?folder=output">Download Output .zip</a>
+          </div>
+        </div>
+        <div class="profile-rules-grid" id="memberAnalyticsList">
+          <div class="empty-state">Upload media from Household phones or Web UI to see per-member storage savings.</div>
         </div>
       </div>
 
@@ -355,7 +396,10 @@
         <div class="card-head">
           <div>
             <h2>Google Photos Output Gallery</h2>
-            <p class="muted">Click any converted photo or video to inspect resolution, file size reduction, camera model, date taken, and GPS location.</p>
+            <p class="muted">Click any converted photo or video to inspect resolution, file size reduction, Motion Photo status, camera model, date taken, and GPS location.</p>
+          </div>
+          <div class="card-actions">
+            <a class="btn btn-primary btn-sm" href="/api/export-zip?folder=output">Download Output .zip</a>
           </div>
         </div>
         <div class="gallery-grid" id="galleryGrid">
@@ -397,10 +441,22 @@
           </div>
 
           <div class="qr-box">
+            <img id="pairingQrImg" alt="Scan to pair Household Samba Android App" class="qr-image" />
+            <div class="qr-meta">
+              <strong>1-Tap Household Samba Pairing QR (<code>pixelnas://pair</code>)</strong>
+              <p class="muted">Scan with your family phone's Camera app or paste into <code>PixelPhotoNAS-Household.apk</code> to auto-fill Samba IP, port, share &amp; auth!</p>
+              <div class="endpoint-copy-row">
+                <code id="endpointPairingUri">pixelnas://pair?...</code>
+                <button class="btn btn-secondary btn-sm copy-btn" data-copy-target="endpointPairingUri">Copy</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="qr-box" style="margin-top:10px;">
             <img id="portalQrImg" alt="Scan to open Pixel NAS Web UI" class="qr-image" />
             <div class="qr-meta">
-              <strong>Scan from your daily Android phone on Wi-Fi</strong>
-              <p class="muted">Open the NAS dashboard in Chrome or auto-discover this Samba server in the Household Android App.</p>
+              <strong>Open Web Dashboard on Wi-Fi</strong>
+              <p class="muted">Open the full NAS dashboard in Chrome on any LAN phone, tablet, or laptop.</p>
               <div class="endpoint-copy-row">
                 <code id="endpointWebUrl">http://...</code>
                 <button class="btn btn-secondary btn-sm copy-btn" data-copy-target="endpointWebUrl">Copy</button>
@@ -620,6 +676,39 @@
             <label for="inputMinFreeGb">Low-Storage FIFO Watermark (GB Free)</label>
             <input type="number" id="inputMinFreeGb" min="0" max="64" step="0.5" value="0" />
             <small>Set e.g. <code>3.0</code> GB to evict oldest synced files from Folder 2 automatically if disk runs low during large uploads.</small>
+          </div>
+
+          <div class="field">
+            <label class="inline-check">
+              <input type="checkbox" id="inputQuietHoursEnabled" />
+              <span>Quiet-Hours 4K Video Transcoding Window (Keep Daytime Cool)</span>
+            </label>
+            <div class="auth-inputs">
+              <input type="number" id="inputQuietStart" min="0" max="23" value="23" title="Start hour (0-23)" />
+              <input type="number" id="inputQuietEnd" min="0" max="23" value="7" title="End hour (0-23)" />
+            </div>
+            <small>Photos convert 24/7 immediately; heavy 4K video transcodes wait in <code>Incoming/</code> until Quiet Hours (e.g. <code>23</code> to <code>7</code>).</small>
+          </div>
+
+          <div class="field">
+            <label for="inputWebhookUrl">24/7 Health Guard Push Webhook (<code>ntfy.sh</code> / Discord / Slack)</label>
+            <div class="auth-inputs">
+              <input type="url" id="inputWebhookUrl" placeholder="https://ntfy.sh/my-pixel-nas or Discord/Slack webhook" />
+              <button type="button" class="btn btn-secondary btn-sm" id="testWebhookBtn">Send Test Alert</button>
+            </div>
+            <small>Fires instant push alerts if a corrupted file enters Quarantine or free Pixel storage drops low.</small>
+          </div>
+        </div>
+
+        <div class="manual-action-bar" style="margin-top:16px;padding-top:14px;border-top:1px solid var(--border);">
+          <div>
+            <strong>Settings &amp; Deduplication Ledger Backup</strong>
+            <div class="muted small-note">Export or restore all folder profiles, settings, SHA-256 hashes, and perceptual dHash history as JSON.</div>
+          </div>
+          <div class="card-actions">
+            <button type="button" class="btn btn-secondary btn-sm" id="exportBackupBtn">Export Backup JSON</button>
+            <button type="button" class="btn btn-ghost btn-sm" id="importBackupBtn">Import Backup JSON</button>
+            <input type="file" id="importBackupInput" accept=".json,application/json" hidden />
           </div>
         </div>
       </form>

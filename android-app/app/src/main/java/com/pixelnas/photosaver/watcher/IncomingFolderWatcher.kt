@@ -7,10 +7,14 @@ import android.os.BatteryManager
 import android.os.FileObserver
 import android.os.StatFs
 import com.pixelnas.photosaver.converter.StorageSaverConverter
+import com.pixelnas.photosaver.converter.TakeoutZipExtractor
 import com.pixelnas.photosaver.data.HistoryStore
 import com.pixelnas.photosaver.data.NasPreferences
 import com.pixelnas.photosaver.model.ConversionRecord
+import com.pixelnas.photosaver.model.NasConfig
 import com.pixelnas.photosaver.model.WorkerRuntimeState
+import com.pixelnas.photosaver.util.WebhookNotifier
+import java.util.Calendar
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -37,6 +41,7 @@ class IncomingFolderWatcher(
     private val channel = Channel<File>(Channel.UNLIMITED)
     private val queuedPaths = ConcurrentHashMap.newKeySet<String>()
     private val failureCounts = ConcurrentHashMap<String, Int>()
+    private var lastLowStorageAlertMs: Long = 0L
 
     private var workerJob: Job? = null
     private var sweeperJob: Job? = null
@@ -59,9 +64,20 @@ class IncomingFolderWatcher(
                     _state.update { it.copy(activeFile = file.name, queueSize = (queuedPaths.size - 1).coerceAtLeast(0)) }
                     if (file.isFile && waitUntilFileStable(file)) {
                         val cfg = prefs.current
-                        val rec = StorageSaverConverter.processFile(context, file, cfg, historyStore)
+                        if (file.extension.equals("zip", ignoreCase = true)) {
+                            if (cfg.extractTakeoutZips) {
+                                val extracted = TakeoutZipExtractor.extractIncomingZip(
+                                    zipFile = file,
+                                    allowedMediaExtensions = StorageSaverConverter.PHOTO_EXTENSIONS + StorageSaverConverter.VIDEO_EXTENSIONS,
+                                    deleteArchiveAfter = cfg.deleteOriginals
+                                )
+                                extracted.forEach { enqueue(it) }
+                            }
+                        } else {
+                            val rec = StorageSaverConverter.processFile(context, file, cfg, historyStore)
+                            historyStore.record(rec)
+                        }
                         failureCounts.remove(pathKey)
-                        historyStore.record(rec)
                         if (cfg.deleteOriginals) {
                             pruneEmptySubfolders(File(cfg.incomingDir))
                         }
@@ -99,6 +115,14 @@ class IncomingFolderWatcher(
                                     errorMessage = "Quarantined after $attempts failed attempts: $errMsg"
                                 )
                             )
+                            if (cfg.webhookUrl.isNotBlank() && cfg.webhookOnQuarantine) {
+                                WebhookNotifier.sendAlert(
+                                    cfg.webhookUrl,
+                                    "Pixel Photo NAS · File Quarantined",
+                                    "${file.name} isolated to Quarantine after $attempts attempts: $errMsg",
+                                    "quarantine"
+                                )
+                            }
                             onStatsChanged()
                         }
                     } else {
@@ -115,15 +139,48 @@ class IncomingFolderWatcher(
             while (isActive) {
                 rebindFileObserver()
                 val (temp, pct) = readBatteryStatus()
-                _state.update { it.copy(batteryTempCelsius = temp, batteryLevelPct = pct) }
+                val plugged = isPluggedIntoPower()
+                val swellWarn = plugged && pct >= 99 && temp >= 38.5f
+                _state.update {
+                    it.copy(
+                        batteryTempCelsius = temp,
+                        batteryLevelPct = pct,
+                        acPluggedIn = plugged,
+                        batterySwellWarning = swellWarn
+                    )
+                }
                 val cfg = prefs.current
                 val (inc, out) = prefs.ensureFolders()
                 if (cfg.autoWatchEnabled) {
+                    if (cfg.extractTakeoutZips) {
+                        listIncomingZips(inc, cfg.recursiveSubfolders).forEach { enqueue(it) }
+                    }
+                    var deferred = 0
                     listIncomingFiles(inc, cfg.recursiveSubfolders)
                         .sortedBy { it.lastModified() }
-                        .forEach { enqueue(it) }
+                        .forEach { f ->
+                            if (!enqueue(f) && f.extension.lowercase() in StorageSaverConverter.VIDEO_EXTENSIONS && cfg.quietHoursEnabled) {
+                                deferred++
+                            }
+                        }
+                    _state.update { it.copy(deferredVideoCount = deferred) }
                     if (cfg.deleteOriginals) {
                         pruneEmptySubfolders(inc)
+                    }
+                }
+                if (cfg.webhookUrl.isNotBlank() && cfg.webhookOnLowStorage) {
+                    val freeGb = runCatching {
+                        StatFs(out.absolutePath).availableBytes.toDouble() / (1024.0 * 1024.0 * 1024.0)
+                    }.getOrDefault(99.0)
+                    val nowMs = System.currentTimeMillis()
+                    if (freeGb < 3.0 && (nowMs - lastLowStorageAlertMs) > 6L * 3600_000L) {
+                        lastLowStorageAlertMs = nowMs
+                        WebhookNotifier.sendAlert(
+                            cfg.webhookUrl,
+                            "Pixel Photo NAS · Low Storage Warning",
+                            String.format("Only %.2f GB free on Pixel NAS storage.", freeGb),
+                            "storage"
+                        )
                     }
                 }
                 if (cfg.autoPurgeOutputDays > 0 || cfg.minFreeStorageGb > 0f) {
@@ -211,8 +268,18 @@ class IncomingFolderWatcher(
         return enqueue(file)
     }
 
-    fun enqueue(file: File): Boolean {
-        if (!StorageSaverConverter.isSupportedMedia(file)) return false
+    fun enqueue(file: File, manualOverride: Boolean = false): Boolean {
+        val isZip = file.isFile && file.extension.equals("zip", ignoreCase = true) && !file.name.startsWith(".")
+        if (!isZip && !StorageSaverConverter.isSupportedMedia(file)) return false
+        if (!manualOverride && file.extension.lowercase() in StorageSaverConverter.VIDEO_EXTENSIONS) {
+            val cfg = prefs.current
+            if (cfg.quietHoursEnabled) {
+                val nowHr = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
+                if (!NasConfig.isWithinQuietHours(nowHr, cfg.quietHoursStart, cfg.quietHoursEnd)) {
+                    return false
+                }
+            }
+        }
         val key = file.absolutePath
         if (!queuedPaths.add(key)) return false
         channel.trySend(file)
@@ -224,10 +291,29 @@ class IncomingFolderWatcher(
         val cfg = prefs.current
         val (inc, _) = prefs.ensureFolders()
         var count = 0
+        if (cfg.extractTakeoutZips) {
+            listIncomingZips(inc, cfg.recursiveSubfolders).forEach { f ->
+                if (enqueue(f, manualOverride = true)) count++
+            }
+        }
         listIncomingFiles(inc, cfg.recursiveSubfolders).forEach { f ->
-            if (enqueue(f)) count++
+            if (enqueue(f, manualOverride = true)) count++
         }
         return count
+    }
+
+    fun listIncomingZips(incDir: File, recursive: Boolean): List<File> {
+        if (!incDir.isDirectory) return emptyList()
+        return if (recursive) {
+            incDir.walkTopDown()
+                .onEnter { dir -> dir == incDir || !dir.name.startsWith(".") }
+                .filter { it.isFile && !it.name.startsWith(".") && it.extension.equals("zip", ignoreCase = true) }
+                .toList()
+        } else {
+            incDir.listFiles()
+                ?.filter { it.isFile && !it.name.startsWith(".") && it.extension.equals("zip", ignoreCase = true) }
+                .orEmpty()
+        }
     }
 
     fun listIncomingFiles(incDir: File, recursive: Boolean): List<File> {
@@ -333,6 +419,16 @@ class IncomingFolderWatcher(
             }
             _state.update { it.copy(thermalPaused = true, batteryTempCelsius = temp, batteryLevelPct = pct) }
             delay(5000L)
+        }
+    }
+
+    fun isPluggedIntoPower(): Boolean {
+        return try {
+            val intent = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+            val plugged = intent?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) ?: 0
+            plugged != 0
+        } catch (_: Exception) {
+            true
         }
     }
 
