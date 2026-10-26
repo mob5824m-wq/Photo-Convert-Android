@@ -41,6 +41,21 @@ GitHub Actions (`.github/workflows/build-apk.yml` + `server/versioning.py`) runs
 
 ---
 
+## Smart Household & Closet NAS Capabilities
+
+- **Instant QR & Deep-Link Pairing (`pixelnas://pair?...`)**: Scan the pairing QR on the Closet Pixel NAS or Web UI (or paste the `pixelnas://pair` link) to auto-configure Samba host, port (`445`/`4445`), share name, workgroup, and auth in 1 tap.
+- **Google Takeout `.zip` Direct Drop & Auto-Extractor**: Drop `takeout-*.zip` archives directly into `Incoming` — stream-extracts photos, videos, and `.json` GPS/date sidecars safely (zip-slip guarded), converts to Storage Saver, and removes the `.zip`.
+- **Pixel Motion Photo (`MVIMG` / `.MP.jpg`) & Wide-Gamut `sRGB` Preservation**: Preserves embedded MP4 motion clips inside resized `≤ 16 MP` JPEGs and normalizes Display P3 / HEIC / AVIF wide-gamut ICC profiles to standard `sRGB`.
+- **Smart Camera-Roll Sync Rules + "Free Up Phone Space"**: Configure **Charging-Only** and **Trusted Home Subnet** rules in `PixelPhotoNAS-Household.apk`, and move already-synced local Camera Roll items safely to Android's 30-day Trash (`MediaStore.createTrashRequest`).
+- **Interactive Remote Samba Preview, Save-to-Gallery & Share**: Preview photos directly over SMB2 inside the Household App's **Samba Share** browser, save remote NAS files to your phone's Gallery/Downloads, or share them via Android Share Sheet.
+- **Per-Member Storage Analytics & Optional `YYYY/YYYY-MM` Auto-Sorting**: View per-member/per-profile uploaded counts and GB saved, plus optional capture-date chronological folder sorting.
+- **Perceptual Burst & Near-Duplicate Guard (`64-bit dHash`)**: Optional `64-bit dHash` Hamming-distance filter alongside `SHA-256` to catch re-encoded WhatsApp copies and near-identical camera bursts.
+- **Built-In `PublicShare` Privacy Scrubber Profile**: Uploads to `/Incoming/PublicShare/` automatically scrub GPS coordinates and camera serials while keeping capture timestamps intact.
+- **24/7 Health Guard & Push Webhooks (`ntfy.sh` / Discord / Slack)**: Monitors AC power, warm trickle battery swell conditions, quarantined files, and low disk space with instant webhook push alerts.
+- **Streaming `.zip` Album Export, Backup/Restore JSON & Quiet-Hours Video Schedule**: Download `Output` albums as streaming `.zip` archives, export/import NAS settings + deduplication ledgers as JSON, and optionally defer heavy 4K video transcodes to overnight Quiet Hours.
+
+---
+
 ## Quick Start
 
 ### 1. Closet Pixel 1–5 NAS Server (`PixelPhotoNAS-vX.Y.Z-Pixel1to5-Signed.apk`)

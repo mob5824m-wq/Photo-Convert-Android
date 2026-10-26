@@ -134,10 +134,27 @@
       $("toggleSmartMetadata").checked =
         cfg.restore_exif_from_filename !== false && cfg.merge_takeout_json !== false;
     }
-    $("diskUsageNote").textContent = `Free Storage: ${formatBytes(st.storage.free_bytes)} / ${formatBytes(st.storage.total_bytes)}`;
+    if ($("toggleMotionPhotos")) {
+      $("toggleMotionPhotos").checked = cfg.preserve_motion_photos !== false;
+    }
+    if ($("togglePerceptualDedup")) {
+      $("togglePerceptualDedup").checked = !!cfg.perceptual_dedup_enabled;
+    }
+    if ($("toggleOrganizeByDate")) {
+      $("toggleOrganizeByDate").checked = !!cfg.organize_by_date;
+    }
+    $("diskUsageNote").textContent = `Free Storage: ${formatBytes(st.storage.free_bytes)} / ${formatBytes(st.storage.total_bytes)}${worker.quiet_hours_deferring_videos ? ` · Quiet Hours (${worker.deferred_video_count || 0} video deferred)` : ""}`;
 
     // Network Endpoints & QR
     $("endpointWebUrl").textContent = st.network.web_ui_url;
+    if ($("endpointPairingUri") && st.network.pairing_uri) {
+      $("endpointPairingUri").textContent = st.network.pairing_uri;
+      const pairQrSrc = `/api/qrcode?text=${encodeURIComponent(st.network.pairing_uri)}`;
+      if ($("pairingQrImg") && $("pairingQrImg").dataset.src !== pairQrSrc) {
+        $("pairingQrImg").src = pairQrSrc;
+        $("pairingQrImg").dataset.src = pairQrSrc;
+      }
+    }
     if ($("endpointSmbUnc")) {
       $("endpointSmbUnc").textContent = st.network.smb_saver_unc || st.network.smb_unc || "";
     }
@@ -186,9 +203,18 @@
       if ($("inputMinFreeGb")) {
         $("inputMinFreeGb").value = cfg.min_free_storage_gb || 0;
       }
+      if ($("inputQuietHoursEnabled")) {
+        $("inputQuietHoursEnabled").checked = !!cfg.quiet_hours_enabled;
+        $("inputQuietStart").value = cfg.quiet_hours_start ?? 23;
+        $("inputQuietEnd").value = cfg.quiet_hours_end ?? 7;
+      }
+      if ($("inputWebhookUrl")) {
+        $("inputWebhookUrl").value = cfg.webhook_url || "";
+      }
     }
 
     renderFolderProfiles(cfg.folder_profiles || []);
+    renderMemberAnalytics(st.member_stats || []);
     renderFileLists();
     renderHistory();
     renderGallery();
@@ -233,6 +259,9 @@
         const badge = isSaver
           ? `<span class="badge badge-accent">Storage Saver ≤${p.max_megapixels || 16} MP</span>`
           : `<span class="badge badge-success">Original 100%</span>`;
+        const privBadge = p.strip_gps
+          ? ` <span class="badge badge-neutral">GPS Stripped</span>`
+          : "";
         const dest = p.output_subfolder
           ? `DCIM/PixelNAS/${escapeHtml(p.output_subfolder)}`
           : `DCIM/PixelNAS`;
@@ -240,11 +269,12 @@
           <div class="profile-rule-card">
             <div class="profile-rule-top">
               <span class="profile-rule-path">/Incoming/${escapeHtml(fname)}/</span>
-              ${badge}
+              <div>${badge}${privBadge}</div>
             </div>
             <div class="profile-rule-desc">
               Routes to <code>${dest}</code>
               ${p.compress_videos !== false && isSaver ? " · 1080p Video" : " · Direct Video"}
+              ${p.strip_gps ? " · Scrubs GPS &amp; Serials" : ""}
             </div>
             <div>
               <button type="button" class="btn btn-ghost btn-sm remove-profile-btn" data-profile-idx="${idx}">Remove Rule</button>
@@ -252,6 +282,31 @@
           </div>
         `;
       })
+      .join("");
+  }
+
+  function renderMemberAnalytics(members) {
+    const el = $("memberAnalyticsList");
+    if (!el) return;
+    if (!members || !members.length) {
+      el.innerHTML = `<div class="empty-state">Upload media from Household phones or Web UI to see per-member storage savings.</div>`;
+      return;
+    }
+    el.innerHTML = members
+      .map(
+        (m) => `
+        <div class="profile-rule-card">
+          <div class="profile-rule-top">
+            <span class="profile-rule-path">${escapeHtml(m.member)}</span>
+            <span class="badge badge-success">${m.saved_bytes > 0 ? `-${m.saved_pct}% saved` : "Pass-through"}</span>
+          </div>
+          <div class="profile-rule-desc">
+            <strong>${m.file_count}</strong> file${m.file_count === 1 ? "" : "s"} ·
+            Uploaded ${formatBytes(m.orig_bytes)} → Output ${formatBytes(m.out_bytes)}
+            ${m.saved_bytes > 0 ? `<br/>Freed <strong>${formatBytes(m.saved_bytes)}</strong>` : ""}
+          </div>
+        </div>`
+      )
       .join("");
   }
 
@@ -370,6 +425,7 @@
             <div class="gallery-card-title">${escapeHtml(f.rel_path || f.name)}</div>
             <div class="gallery-card-stats">
               <span>${f.width ? `${f.width}×${f.height}` : f.media_type.toUpperCase()} · ${formatBytes(f.size_bytes)}</span>
+              ${f.has_motion_video ? `<span class="badge badge-accent">Motion</span>` : ""}
               ${conv && conv.saved_bytes > 0 ? `<span class="badge badge-success">-${conv.saved_pct}%</span>` : ""}
             </div>
           </div>
@@ -558,7 +614,9 @@
       toast("Enter a valid folder name");
       return;
     }
-    const isSaver = $("newProfileMode").value === "saver";
+    const modeChoice = $("newProfileMode").value;
+    const isSaver = modeChoice !== "original";
+    const stripGps = modeChoice === "privacy";
     const outSub = $("newProfileOutSub").value.trim().replace(/[^A-Za-z0-9._/-]/g, "");
     const existing = (state.status.settings.folder_profiles || []).filter(
       (p) => p.folder_name.toLowerCase() !== folderRaw.toLowerCase()
@@ -569,6 +627,7 @@
       max_megapixels: 16.0,
       jpeg_quality: 85,
       compress_videos: isSaver,
+      strip_gps: stripGps,
       output_subfolder: outSub,
     });
     $("newProfileFolder").value = "";
@@ -621,10 +680,44 @@
           skip_duplicates: e.target.checked,
           restore_exif_from_filename: e.target.checked,
           merge_takeout_json: e.target.checked,
+          extract_takeout_zips: e.target.checked,
         },
         e.target.checked
-          ? "Smart EXIF Repair, Google Takeout JSON merge & SHA-256 dedup enabled"
+          ? "Smart EXIF Repair, Takeout .zip/.json & SHA-256 dedup enabled"
           : "Smart EXIF Repair & SHA-256 dedup disabled"
+      )
+    );
+  }
+  if ($("toggleMotionPhotos")) {
+    $("toggleMotionPhotos").addEventListener("change", (e) =>
+      patchSettings(
+        {
+          preserve_motion_photos: e.target.checked,
+          normalize_srgb: e.target.checked,
+        },
+        e.target.checked
+          ? "Motion Photo preservation & sRGB color normalization enabled"
+          : "Motion Photo preservation paused"
+      )
+    );
+  }
+  if ($("togglePerceptualDedup")) {
+    $("togglePerceptualDedup").addEventListener("change", (e) =>
+      patchSettings(
+        { perceptual_dedup_enabled: e.target.checked },
+        e.target.checked
+          ? "Perceptual 64-bit dHash burst/near-duplicate guard enabled"
+          : "Perceptual dHash guard disabled"
+      )
+    );
+  }
+  if ($("toggleOrganizeByDate")) {
+    $("toggleOrganizeByDate").addEventListener("change", (e) =>
+      patchSettings(
+        { organize_by_date: e.target.checked },
+        e.target.checked
+          ? "Auto-sorting Output into YYYY/YYYY-MM subfolders"
+          : "Using flat Output album folders"
       )
     );
   }
@@ -799,10 +892,83 @@
         thermal_limit_celsius: Number($("inputThermal").value),
         auto_purge_output_days: Number($("inputRetentionDays").value || 0),
         min_free_storage_gb: Number($("inputMinFreeGb").value || 0),
+        quiet_hours_enabled: $("inputQuietHoursEnabled")
+          ? $("inputQuietHoursEnabled").checked
+          : false,
+        quiet_hours_start: $("inputQuietStart")
+          ? Number($("inputQuietStart").value || 23)
+          : 23,
+        quiet_hours_end: $("inputQuietEnd")
+          ? Number($("inputQuietEnd").value || 7)
+          : 7,
+        webhook_url: $("inputWebhookUrl") ? $("inputWebhookUrl").value.trim() : "",
       },
       "Saved NAS & Storage Saver settings"
     );
   });
+
+  if ($("testWebhookBtn")) {
+    $("testWebhookBtn").addEventListener("click", async () => {
+      const url = $("inputWebhookUrl") ? $("inputWebhookUrl").value.trim() : "";
+      if (!url) {
+        toast("Enter a webhook URL first");
+        return;
+      }
+      try {
+        const res = await api("/api/webhook/test", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ webhook_url: url }),
+        });
+        toast(res.ok ? `Webhook delivered (${res.detail})` : `Webhook error: ${res.detail}`);
+      } catch (err) {
+        toast(`Webhook failed: ${err.message}`);
+      }
+    });
+  }
+
+  if ($("exportBackupBtn")) {
+    $("exportBackupBtn").addEventListener("click", async () => {
+      try {
+        const data = await api("/api/backup/export");
+        const blob = new Blob([JSON.stringify(data, null, 2)], {
+          type: "application/json",
+        });
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = `pixel-photo-nas-backup-${new Date().toISOString().slice(0, 10)}.json`;
+        a.click();
+        URL.revokeObjectURL(a.href);
+        toast("Downloaded NAS settings & dedup ledger backup JSON");
+      } catch (err) {
+        toast(`Export failed: ${err.message}`);
+      }
+    });
+  }
+
+  if ($("importBackupBtn") && $("importBackupInput")) {
+    $("importBackupBtn").addEventListener("click", () => $("importBackupInput").click());
+    $("importBackupInput").addEventListener("change", async () => {
+      const file = $("importBackupInput").files[0];
+      $("importBackupInput").value = "";
+      if (!file) return;
+      try {
+        const parsed = JSON.parse(await file.text());
+        const res = await api("/api/backup/import", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(parsed),
+        });
+        state.formDirty = false;
+        toast(
+          `Restored settings + ${res.restored_ledger_entries || 0} deduplication hash(es)`
+        );
+        await refreshData();
+      } catch (err) {
+        toast(`Import failed: ${err.message}`);
+      }
+    });
+  }
 
   $("refreshBtn").addEventListener("click", () => refreshData());
 

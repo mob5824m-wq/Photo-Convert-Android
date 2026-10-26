@@ -41,6 +41,8 @@ class HouseholdPreferences(context: Context) {
             password = prefs.getString("smb_password", "") ?: "",
             workgroup = prefs.getString("smb_workgroup", "WORKGROUP") ?: "WORKGROUP",
             autoCameraSyncWifiOnly = prefs.getBoolean("auto_camera_sync_wifi", false),
+            syncChargingOnly = prefs.getBoolean("sync_charging_only", false),
+            trustedSubnetPrefix = prefs.getString("trusted_subnet_prefix", "") ?: "",
             syncVideosToo = prefs.getBoolean("sync_videos_too", true)
         )
     }
@@ -61,6 +63,8 @@ class HouseholdPreferences(context: Context) {
             .putString("smb_password", next.password)
             .putString("smb_workgroup", next.workgroup.trim().ifBlank { "WORKGROUP" })
             .putBoolean("auto_camera_sync_wifi", next.autoCameraSyncWifiOnly)
+            .putBoolean("sync_charging_only", next.syncChargingOnly)
+            .putString("trusted_subnet_prefix", next.trustedSubnetPrefix.trim())
             .putBoolean("sync_videos_too", next.syncVideosToo)
             .apply()
         _configFlow.value = next

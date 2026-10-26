@@ -11,11 +11,13 @@ import com.pixelnas.photosaver.converter.StorageSaverConverter
 import com.pixelnas.photosaver.model.ConversionRecord
 import com.pixelnas.photosaver.model.FolderProfileRule
 import com.pixelnas.photosaver.model.HistorySummary
+import com.pixelnas.photosaver.model.MemberAnalyticsItem
 import com.pixelnas.photosaver.model.NasConfig
 import com.pixelnas.photosaver.model.PixelHardwareInfo
 import com.pixelnas.photosaver.model.WorkerRuntimeState
 import com.pixelnas.photosaver.service.PixelNasService
 import com.pixelnas.photosaver.util.PixelDeviceDetector
+import com.pixelnas.photosaver.util.WebhookNotifier
 import com.pixelnas.photosaver.widget.PixelNasUploadWidgetProvider
 import com.pixelnas.photosaver.widget.WidgetUploadActivity
 import kotlinx.coroutines.Dispatchers
@@ -25,6 +27,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 data class StorageTelemetry(
     val incomingCount: Int = 0,
@@ -44,6 +47,7 @@ class NasViewModel(application: Application) : AndroidViewModel(application) {
     val runtimeFlow: StateFlow<WorkerRuntimeState> = app.watcher.state
     val recentHistoryFlow: StateFlow<List<ConversionRecord>> = app.historyStore.recentFlow
     val summaryFlow: StateFlow<HistorySummary> = app.historyStore.summaryFlow
+    val memberFlow: StateFlow<List<MemberAnalyticsItem>> = app.historyStore.memberFlow
 
     private val _telemetry = MutableStateFlow(StorageTelemetry())
     val telemetry: StateFlow<StorageTelemetry> = _telemetry.asStateFlow()
@@ -108,7 +112,7 @@ class NasViewModel(application: Application) : AndroidViewModel(application) {
         refreshTelemetry()
     }
 
-    fun addFolderProfile(folderName: String, storageSaver: Boolean, outputSubfolder: String) {
+    fun addFolderProfile(folderName: String, storageSaver: Boolean, outputSubfolder: String, stripGps: Boolean = false) {
         val cleanName = folderName.trim().replace(Regex("[^A-Za-z0-9._-]"), "")
         if (cleanName.isBlank()) return
         val cleanOut = outputSubfolder.trim().replace(Regex("[^A-Za-z0-9._/-]"), "").trim('/')
@@ -121,9 +125,25 @@ class NasViewModel(application: Application) : AndroidViewModel(application) {
                     maxMegapixels = 16.0,
                     jpegQuality = 85,
                     compressVideos = storageSaver,
+                    stripGps = stripGps,
                     outputSubfolder = cleanOut
                 )
             )
+        }
+    }
+
+    fun sendTestWebhook(onResult: (Boolean, String) -> Unit) {
+        val url = app.preferences.current.webhookUrl.trim()
+        viewModelScope.launch {
+            val (ok, detail) = withContext(Dispatchers.IO) {
+                WebhookNotifier.sendAlert(
+                    url,
+                    "Pixel Photo NAS · Test Alert",
+                    "Closet Pixel 24/7 Health Guard webhook is active!",
+                    "test"
+                )
+            }
+            onResult(ok, detail)
         }
     }
 

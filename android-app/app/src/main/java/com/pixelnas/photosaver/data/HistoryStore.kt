@@ -4,8 +4,10 @@ import android.content.ContentValues
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
+import com.pixelnas.photosaver.converter.PerceptualHashHelper
 import com.pixelnas.photosaver.model.ConversionRecord
 import com.pixelnas.photosaver.model.HistorySummary
+import com.pixelnas.photosaver.model.MemberAnalyticsItem
 import com.pixelnas.photosaver.model.QuarantineItem
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -13,13 +15,16 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlin.math.round
 
 class HistoryStore(context: Context) :
-    SQLiteOpenHelper(context.applicationContext, "pixel_nas_history.db", null, 3) {
+    SQLiteOpenHelper(context.applicationContext, "pixel_nas_history.db", null, 4) {
 
     private val _recentFlow = MutableStateFlow<List<ConversionRecord>>(emptyList())
     val recentFlow: StateFlow<List<ConversionRecord>> = _recentFlow.asStateFlow()
 
     private val _summaryFlow = MutableStateFlow(HistorySummary())
     val summaryFlow: StateFlow<HistorySummary> = _summaryFlow.asStateFlow()
+
+    private val _memberFlow = MutableStateFlow<List<MemberAnalyticsItem>>(emptyList())
+    val memberFlow: StateFlow<List<MemberAnalyticsItem>> = _memberFlow.asStateFlow()
 
     init {
         refreshFlows()
@@ -69,6 +74,15 @@ class HistoryStore(context: Context) :
         )
         db.execSQL(
             """
+            CREATE TABLE IF NOT EXISTS seen_dhashes (
+                dhash_hex TEXT PRIMARY KEY,
+                output_filename TEXT NOT NULL,
+                created_at REAL NOT NULL
+            )
+            """.trimIndent()
+        )
+        db.execSQL(
+            """
             CREATE TABLE IF NOT EXISTS quarantine_items (
                 quarantine_name TEXT PRIMARY KEY,
                 original_rel_path TEXT NOT NULL,
@@ -109,6 +123,17 @@ class HistoryStore(context: Context) :
                     attempts INTEGER DEFAULT 2,
                     error_reason TEXT DEFAULT '',
                     quarantined_at REAL NOT NULL
+                )
+                """.trimIndent()
+            )
+        }
+        if (oldVersion < 4) {
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS seen_dhashes (
+                    dhash_hex TEXT PRIMARY KEY,
+                    output_filename TEXT NOT NULL,
+                    created_at REAL NOT NULL
                 )
                 """.trimIndent()
             )
@@ -295,15 +320,83 @@ class HistoryStore(context: Context) :
     }
 
     @Synchronized
+    fun findNearDuplicateDHash(dhashHex: String, maxDistance: Int = 6): Pair<String, Int>? {
+        if (dhashHex.length != 16) return null
+        readableDatabase.rawQuery(
+            "SELECT dhash_hex, output_filename FROM seen_dhashes ORDER BY created_at DESC LIMIT 1500",
+            null
+        ).use { c ->
+            while (c.moveToNext()) {
+                val cand = c.getString(0) ?: continue
+                val dist = PerceptualHashHelper.hammingDistanceHex(dhashHex, cand)
+                if (dist <= maxDistance) {
+                    return (c.getString(1) ?: "") to dist
+                }
+            }
+        }
+        return null
+    }
+
+    @Synchronized
+    fun recordDHash(dhashHex: String, outputFilename: String) {
+        if (dhashHex.length != 16) return
+        val cv = ContentValues().apply {
+            put("dhash_hex", dhashHex)
+            put("output_filename", outputFilename)
+            put("created_at", System.currentTimeMillis() / 1000.0)
+        }
+        writableDatabase.insertWithOnConflict("seen_dhashes", null, cv, SQLiteDatabase.CONFLICT_REPLACE)
+    }
+
+    @Synchronized
+    fun memberBreakdown(): List<MemberAnalyticsItem> {
+        val list = mutableListOf<MemberAnalyticsItem>()
+        readableDatabase.rawQuery(
+            """
+            SELECT
+                COALESCE(NULLIF(TRIM(profile_name), ''), 'Default'),
+                COUNT(*),
+                COALESCE(SUM(orig_bytes), 0),
+                COALESCE(SUM(out_bytes), 0),
+                COALESCE(SUM(saved_bytes), 0)
+            FROM conversion_history
+            WHERE status = 'completed'
+            GROUP BY COALESCE(NULLIF(TRIM(profile_name), ''), 'Default')
+            ORDER BY COALESCE(SUM(orig_bytes), 0) DESC
+            """.trimIndent(),
+            null
+        ).use { c ->
+            while (c.moveToNext()) {
+                val orig = c.getLong(2)
+                val saved = c.getLong(4)
+                val pct = if (orig > 0) round((saved.toDouble() / orig.toDouble()) * 1000.0) / 10.0 else 0.0
+                list.add(
+                    MemberAnalyticsItem(
+                        member = c.getString(0) ?: "Default",
+                        fileCount = c.getInt(1),
+                        origBytes = orig,
+                        outBytes = c.getLong(3),
+                        savedBytes = saved,
+                        savedPct = pct
+                    )
+                )
+            }
+        }
+        return list
+    }
+
+    @Synchronized
     fun clear() {
         writableDatabase.delete("conversion_history", null, null)
         writableDatabase.delete("seen_hashes", null, null)
+        writableDatabase.delete("seen_dhashes", null, null)
         refreshFlows()
     }
 
     private fun refreshFlows() {
         _recentFlow.value = recent(60)
         _summaryFlow.value = summary()
+        _memberFlow.value = memberBreakdown()
     }
 
     private fun android.database.Cursor.toRecord(): ConversionRecord {

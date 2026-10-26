@@ -8,12 +8,14 @@ import android.os.StatFs
 import android.util.Base64
 import android.util.Size
 import androidx.exifinterface.media.ExifInterface
+import com.pixelnas.photosaver.converter.MotionPhotoHelper
 import com.pixelnas.photosaver.converter.StorageSaverConverter
 import com.pixelnas.photosaver.data.HistoryStore
 import com.pixelnas.photosaver.data.NasPreferences
 import com.pixelnas.photosaver.model.ConversionRecord
 import com.pixelnas.photosaver.model.FolderProfileRule
 import com.pixelnas.photosaver.util.PixelDeviceDetector
+import com.pixelnas.photosaver.util.WebhookNotifier
 import com.pixelnas.photosaver.watcher.IncomingFolderWatcher
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
@@ -130,9 +132,11 @@ class NasHttpWebDavServer(
                             put("queue_size", wState.queueSize)
                             put("active_file", wState.activeFile ?: JSONObject.NULL)
                             put("quarantined_total", wState.quarantinedTotal)
+                            put("deferred_video_count", wState.deferredVideoCount)
                             put("last_error", wState.lastError)
                         })
                         put("stats", summaryToJson(summary))
+                        put("member_stats", membersToJsonArray(historyStore))
                         put("folders", JSONObject().apply {
                             put("incoming", JSONObject().apply {
                                 put("path", incDir.absolutePath)
@@ -181,6 +185,7 @@ class NasHttpWebDavServer(
                                 if (effectiveSmbPort == 445) "smb://${ips.first()}/$shareName/"
                                 else "smb://${ips.first()}:$effectiveSmbPort/$shareName/"
                             )
+                            put("pairing_uri", cfg.buildPairingUri(ips.first(), effectiveSmbPort))
                             put("video_engine_available", true)
                         })
                     }
@@ -212,6 +217,7 @@ class NasHttpWebDavServer(
                                             maxMegapixels = item.optDouble("max_megapixels", 16.0),
                                             jpegQuality = item.optInt("jpeg_quality", 85).coerceIn(40, 98),
                                             compressVideos = item.optBoolean("compress_videos", true),
+                                            stripGps = item.optBoolean("strip_gps", fn.equals("PublicShare", true)),
                                             outputSubfolder = item.optString("output_subfolder", "")
                                                 .replace(Regex("[^A-Za-z0-9._/-]"), "")
                                                 .trim('/')
@@ -232,6 +238,15 @@ class NasHttpWebDavServer(
                             skipDuplicates = body.optBoolean("skip_duplicates", old.skipDuplicates),
                             restoreExifFromFilename = body.optBoolean("restore_exif_from_filename", old.restoreExifFromFilename),
                             mergeTakeoutJson = body.optBoolean("merge_takeout_json", old.mergeTakeoutJson),
+                            preserveMotionPhotos = body.optBoolean("preserve_motion_photos", old.preserveMotionPhotos),
+                            normalizeSrgb = body.optBoolean("normalize_srgb", old.normalizeSrgb),
+                            organizeByDate = body.optBoolean("organize_by_date", old.organizeByDate),
+                            perceptualDedupEnabled = body.optBoolean("perceptual_dedup_enabled", old.perceptualDedupEnabled),
+                            extractTakeoutZips = body.optBoolean("extract_takeout_zips", old.extractTakeoutZips),
+                            quietHoursEnabled = body.optBoolean("quiet_hours_enabled", old.quietHoursEnabled),
+                            quietHoursStart = body.optInt("quiet_hours_start", old.quietHoursStart),
+                            quietHoursEnd = body.optInt("quiet_hours_end", old.quietHoursEnd),
+                            webhookUrl = body.optString("webhook_url", old.webhookUrl),
                             quarantineEnabled = body.optBoolean("quarantine_enabled", old.quarantineEnabled),
                             autoPurgeOutputDays = body.optInt("auto_purge_output_days", old.autoPurgeOutputDays),
                             minFreeStorageGb = body.optDouble("min_free_storage_gb", old.minFreeStorageGb.toDouble()).toFloat(),
@@ -371,8 +386,10 @@ class NasHttpWebDavServer(
                                 FileOutputStream(tmp).use { output -> input.copyTo(output, 65536) }
                             }
                             tmp.renameTo(dest)
-                            if (StorageSaverConverter.isSupportedMedia(dest)) {
+                            if (StorageSaverConverter.isSupportedMedia(dest) || dest.extension.equals("zip", true)) {
                                 watcher.enqueueIfAuto(dest)
+                                uploaded.put(dest.relativeTo(incDir).invariantSeparatorsPath)
+                            } else if (dest.extension.equals("json", true)) {
                                 uploaded.put(dest.relativeTo(incDir).invariantSeparatorsPath)
                             }
                         }
@@ -416,7 +433,97 @@ class NasHttpWebDavServer(
                     val resp = JSONObject()
                         .put("items", arr)
                         .put("summary", summaryToJson(historyStore.summary()))
+                        .put("members", membersToJsonArray(historyStore))
                     call.respondText(resp.toString(), ContentType.Application.Json)
+                }
+
+                get("/api/analytics") {
+                    val resp = JSONObject()
+                        .put("summary", summaryToJson(historyStore.summary()))
+                        .put("members", membersToJsonArray(historyStore))
+                    call.respondText(resp.toString(), ContentType.Application.Json)
+                }
+
+                post("/api/webhook/test") {
+                    val body = runCatching { JSONObject(call.receiveText()) }.getOrDefault(JSONObject())
+                    val url = body.optString("webhook_url", prefs.current.webhookUrl).trim()
+                    if (url.isBlank()) {
+                        call.respondText(
+                            JSONObject().put("ok", false).put("detail", "Configure webhook URL first").toString(),
+                            ContentType.Application.Json,
+                            HttpStatusCode.BadRequest
+                        )
+                    } else {
+                        val (ok, detail) = WebhookNotifier.sendAlert(
+                            url,
+                            "Pixel Photo NAS · Test Alert",
+                            "Closet Pixel 24/7 Health Guard webhook is active!",
+                            "test"
+                        )
+                        call.respondText(
+                            JSONObject().put("ok", ok).put("detail", detail).toString(),
+                            ContentType.Application.Json
+                        )
+                    }
+                }
+
+                get("/api/export-zip") {
+                    val folder = call.request.queryParameters["folder"] ?: "output"
+                    val subpath = call.request.queryParameters["subpath"]?.trim('/') ?: ""
+                    val base = resolveFolderRoot(folder)
+                    val targetRoot = if (subpath.isNotBlank()) resolveSubFile(base, subpath) ?: base else base
+                    val zipOut = ByteArrayOutputStream()
+                    java.util.zip.ZipOutputStream(zipOut).use { zos ->
+                        zos.setLevel(java.util.zip.Deflater.NO_COMPRESSION)
+                        targetRoot.walkTopDown()
+                            .filter { it.isFile && !it.name.startsWith(".") }
+                            .forEach { f ->
+                                val rel = runCatching { f.relativeTo(targetRoot).invariantSeparatorsPath }.getOrDefault(f.name)
+                                zos.putNextEntry(java.util.zip.ZipEntry(rel))
+                                f.inputStream().use { it.copyTo(zos, 65536) }
+                                zos.closeEntry()
+                            }
+                    }
+                    val safeName = (subpath.ifBlank { folder }).replace(Regex("[^A-Za-z0-9._-]"), "_")
+                    call.response.header(HttpHeaders.ContentDisposition, "attachment; filename=\"$safeName.zip\"")
+                    call.respondBytes(zipOut.toByteArray(), ContentType.Application.Zip)
+                }
+
+                get("/api/backup/export") {
+                    val hw = PixelDeviceDetector.detectCurrentDevice()
+                    val resp = JSONObject()
+                        .put("app", "Pixel Photo NAS")
+                        .put("version", com.pixelnas.photosaver.BuildConfig.VERSION_NAME)
+                        .put("settings", configToJson(prefs.current, hw.displayName, hw.googlePhotosTier, hw.notes))
+                        .put("ledger", JSONObject().put("seen_hashes", JSONArray()))
+                    call.respondText(resp.toString(), ContentType.Application.Json)
+                }
+
+                post("/api/backup/import") {
+                    val body = JSONObject(call.receiveText())
+                    val sObj = body.optJSONObject("settings")
+                    if (sObj != null) {
+                        prefs.update { old ->
+                            old.copy(
+                                storageSaverEnabled = sObj.optBoolean("storage_saver_enabled", old.storageSaverEnabled),
+                                maxMegapixels = sObj.optDouble("max_megapixels", old.maxMegapixels),
+                                jpegQuality = sObj.optInt("jpeg_quality", old.jpegQuality),
+                                preserveMotionPhotos = sObj.optBoolean("preserve_motion_photos", old.preserveMotionPhotos),
+                                perceptualDedupEnabled = sObj.optBoolean("perceptual_dedup_enabled", old.perceptualDedupEnabled),
+                                organizeByDate = sObj.optBoolean("organize_by_date", old.organizeByDate),
+                                webhookUrl = sObj.optString("webhook_url", old.webhookUrl)
+                            )
+                        }
+                    }
+                    val hw = PixelDeviceDetector.detectCurrentDevice()
+                    call.respondText(
+                        JSONObject()
+                            .put("restored_settings", sObj != null)
+                            .put("restored_ledger_entries", 0)
+                            .put("settings", configToJson(prefs.current, hw.displayName, hw.googlePhotosTier, hw.notes))
+                            .toString(),
+                        ContentType.Application.Json
+                    )
                 }
 
                 delete("/api/history") {
@@ -729,6 +836,7 @@ class NasHttpWebDavServer(
             put("camera_model", cam)
             put("date_taken", dt)
             put("gps_coords", gps)
+            put("has_motion_video", !isVideo && MotionPhotoHelper.extractEmbeddedMp4(file) != null)
             put("is_processing", watcher.state.value.activeFile == file.name)
             put("media_url", "/api/media/$folder/$encRel")
             put("thumb_url", "/api/thumb/$folder/$encRel?v=${file.lastModified() / 1000}")
@@ -773,6 +881,7 @@ class NasHttpWebDavServer(
                     put("max_megapixels", p.maxMegapixels)
                     put("jpeg_quality", p.jpegQuality)
                     put("compress_videos", p.compressVideos)
+                    put("strip_gps", p.stripGps)
                     put("output_subfolder", p.outputSubfolder)
                 }
             )
@@ -786,6 +895,15 @@ class NasHttpWebDavServer(
             put("skip_duplicates", cfg.skipDuplicates)
             put("restore_exif_from_filename", cfg.restoreExifFromFilename)
             put("merge_takeout_json", cfg.mergeTakeoutJson)
+            put("preserve_motion_photos", cfg.preserveMotionPhotos)
+            put("normalize_srgb", cfg.normalizeSrgb)
+            put("organize_by_date", cfg.organizeByDate)
+            put("perceptual_dedup_enabled", cfg.perceptualDedupEnabled)
+            put("extract_takeout_zips", cfg.extractTakeoutZips)
+            put("quiet_hours_enabled", cfg.quietHoursEnabled)
+            put("quiet_hours_start", cfg.quietHoursStart)
+            put("quiet_hours_end", cfg.quietHoursEnd)
+            put("webhook_url", cfg.webhookUrl)
             put("quarantine_enabled", cfg.quarantineEnabled)
             put("quarantine_max_retries", cfg.quarantineMaxRetries)
             put("quarantine_dir", cfg.quarantineDir)
@@ -852,5 +970,22 @@ class NasHttpWebDavServer(
         put("total_saved_bytes", s.totalSavedBytes)
         put("originals_deleted_count", s.originalsDeletedCount)
         put("avg_saved_pct", s.avgSavedPct)
+    }
+
+    private fun membersToJsonArray(store: HistoryStore): JSONArray {
+        val arr = JSONArray()
+        store.memberBreakdown().forEach { m ->
+            arr.put(
+                JSONObject().apply {
+                    put("member", m.member)
+                    put("file_count", m.fileCount)
+                    put("orig_bytes", m.origBytes)
+                    put("out_bytes", m.outBytes)
+                    put("saved_bytes", m.savedBytes)
+                    put("saved_pct", m.savedPct)
+                }
+            )
+        }
+        return arr
     }
 }

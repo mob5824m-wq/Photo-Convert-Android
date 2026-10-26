@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.ColorSpace
 import android.graphics.Matrix
 import android.graphics.Paint
 import android.media.MediaMetadataRetriever
@@ -98,6 +99,22 @@ object StorageSaverConverter {
         ExifInterface.TAG_FLASH,
         ExifInterface.TAG_LENS_MAKE,
         ExifInterface.TAG_LENS_MODEL,
+        ExifInterface.TAG_GPS_LATITUDE,
+        ExifInterface.TAG_GPS_LATITUDE_REF,
+        ExifInterface.TAG_GPS_LONGITUDE,
+        ExifInterface.TAG_GPS_LONGITUDE_REF,
+        ExifInterface.TAG_GPS_ALTITUDE,
+        ExifInterface.TAG_GPS_ALTITUDE_REF,
+        ExifInterface.TAG_GPS_TIMESTAMP,
+        ExifInterface.TAG_GPS_DATESTAMP,
+        ExifInterface.TAG_GPS_PROCESSING_METHOD
+    )
+
+    private val GPS_AND_PRIVACY_EXIF_TAGS = setOf(
+        ExifInterface.TAG_ARTIST,
+        "BodySerialNumber",
+        "CameraOwnerName",
+        "LensSerialNumber",
         ExifInterface.TAG_GPS_LATITUDE,
         ExifInterface.TAG_GPS_LATITUDE_REF,
         ExifInterface.TAG_GPS_LONGITUDE,
@@ -226,20 +243,37 @@ object StorageSaverConverter {
 
         val incomingRoot = File(config.incomingDir)
         val matchedProfile = config.matchFolderProfile(incomingRoot, sourceFile)
-        val activeProfileName = matchedProfile?.folderName ?: "default"
+        val relSubParts = try {
+            sourceFile.parentFile?.relativeTo(incomingRoot)?.invariantSeparatorsPath
+                .orEmpty()
+                .split("/")
+                .filter { it.isNotBlank() && it != "." }
+        } catch (_: Exception) {
+            emptyList()
+        }
+        val activeProfileName = when {
+            matchedProfile != null && relSubParts.size >= 2 && !relSubParts[1].endsWith("_unpacked") ->
+                "${matchedProfile.folderName}/${relSubParts[1]}"
+            matchedProfile != null -> matchedProfile.folderName
+            else -> "default"
+        }
+        val stripGpsEffective = config.stripGpsGlobally ||
+            matchedProfile?.stripGps == true ||
+            matchedProfile?.folderName.equals("PublicShare", ignoreCase = true)
         val effectiveConfig = if (matchedProfile != null) {
             config.copy(
                 storageSaverEnabled = matchedProfile.storageSaverEnabled,
                 maxMegapixels = matchedProfile.maxMegapixels,
                 jpegQuality = matchedProfile.jpegQuality,
-                compressVideos = matchedProfile.compressVideos
+                compressVideos = matchedProfile.compressVideos,
+                stripGpsGlobally = stripGpsEffective
             )
         } else {
-            config
+            config.copy(stripGpsGlobally = stripGpsEffective)
         }
 
         val baseOutputRoot = File(config.outputDir).apply { mkdirs() }
-        val targetOutputDir = if (!matchedProfile?.outputSubfolder.isNullOrBlank()) {
+        var targetOutputDir = if (!matchedProfile?.outputSubfolder.isNullOrBlank()) {
             File(baseOutputRoot, matchedProfile!!.outputSubfolder).apply { mkdirs() }
         } else {
             baseOutputRoot
@@ -256,6 +290,12 @@ object StorageSaverConverter {
         val parsedFnDate = if (effectiveConfig.restoreExifFromFilename) parseDateFromFilename(sourceFile.name) else null
 
         val effectiveModified = takeout.epochMillis ?: parsedFnDate?.second ?: sourceFile.lastModified()
+        if (effectiveConfig.organizeByDate) {
+            val fmtY = SimpleDateFormat("yyyy", Locale.US)
+            val fmtYm = SimpleDateFormat("yyyy-MM", Locale.US)
+            val dt = Date(effectiveModified)
+            targetOutputDir = File(File(targetOutputDir, fmtY.format(dt)), fmtYm.format(dt)).apply { mkdirs() }
+        }
 
         // SHA-256 duplicate shield
         val sha256 = computeSha256(sourceFile)
@@ -284,14 +324,45 @@ object StorageSaverConverter {
             }
         }
 
-        val relPrefix = try {
-            val relParent = sourceFile.parentFile?.relativeTo(incomingRoot)?.invariantSeparatorsPath.orEmpty()
-            val subParts = relParent.split("/").filter { it.isNotBlank() && it != "." }
-            val stripped = if (matchedProfile != null && subParts.firstOrNull().equals(matchedProfile.folderName, ignoreCase = true)) {
-                subParts.drop(1)
-            } else {
-                subParts
+        // Optional 64-bit perceptual dHash burst / near-duplicate guard
+        var computedDHash = ""
+        if (ext in PHOTO_EXTENSIONS && effectiveConfig.perceptualDedupEnabled && historyStore != null) {
+            val tinyOpts = BitmapFactory.Options().apply { inSampleSize = 8 }
+            val tinyBmp = BitmapFactory.decodeFile(sourceFile.absolutePath, tinyOpts)
+            if (tinyBmp != null) {
+                computedDHash = PerceptualHashHelper.computeDHashHex(tinyBmp)
+                tinyBmp.recycle()
+                val nearDup = historyStore.findNearDuplicateDHash(computedDHash, effectiveConfig.perceptualHammingThreshold)
+                if (nearDup != null) {
+                    var deleted = false
+                    if (effectiveConfig.deleteOriginals) {
+                        deleted = sourceFile.delete() || !sourceFile.exists()
+                        sidecar?.delete()
+                    }
+                    return@withContext ConversionRecord(
+                        originalFilename = sourceFile.name,
+                        outputFilename = nearDup.first,
+                        mediaType = "photo",
+                        mode = "duplicate_skipped",
+                        profileName = activeProfileName,
+                        origBytes = origBytes,
+                        outBytes = 0L,
+                        savedBytes = origBytes,
+                        savedPct = 100.0,
+                        metadataNote = "Near-Duplicate Skipped (dHash Δ=${nearDup.second})",
+                        originalDeleted = deleted,
+                        durationMs = System.currentTimeMillis() - startMs
+                    )
+                }
             }
+        }
+
+        val relPrefix = try {
+            val stripped = if (matchedProfile != null && relSubParts.firstOrNull().equals(matchedProfile.folderName, ignoreCase = true)) {
+                relSubParts.drop(1)
+            } else {
+                relSubParts
+            }.filterNot { it.endsWith("_unpacked") }
             if (stripped.isNotEmpty()) stripped.joinToString("_") + "_" else ""
         } catch (_: Exception) {
             ""
@@ -321,13 +392,16 @@ object StorageSaverConverter {
             else -> throw IllegalArgumentException("Unsupported format: .$ext")
         }
 
-        val outFile = File(targetOutputDir, result.outputFilename)
+        val outFile = File(targetOutputDir, File(result.outputFilename).name)
         if (!outFile.isFile || outFile.length() <= 0L) {
             throw IllegalStateException("Output verification failed; keeping original safe in Incoming.")
         }
 
         val relOutputName = outFile.relativeTo(baseOutputRoot).invariantSeparatorsPath
         historyStore?.recordHash(sha256, relOutputName)
+        if (computedDHash.isNotEmpty() && effectiveConfig.perceptualDedupEnabled) {
+            historyStore?.recordDHash(computedDHash, relOutputName)
+        }
 
         var deleted = false
         if (effectiveConfig.deleteOriginals && sourceFile.exists()) {
@@ -392,7 +466,14 @@ object StorageSaverConverter {
             try {
                 sourceFile.copyTo(tmp, overwrite = true)
                 if (sourceFile.extension.lowercase() in listOf("jpg", "jpeg")) {
-                    note = enrichExifTags(srcExif, tmp, takeout, fallbackFilenameExifDate, keepOriginalOrientation = true)
+                    note = enrichExifTags(
+                        srcExif,
+                        tmp,
+                        takeout,
+                        fallbackFilenameExifDate,
+                        keepOriginalOrientation = true,
+                        stripGps = config.stripGpsGlobally
+                    )
                 }
                 if (!tmp.renameTo(dest)) {
                     tmp.copyTo(dest, overwrite = true)
@@ -427,10 +508,18 @@ object StorageSaverConverter {
             )
         }
 
+        val motionMp4 = if (config.preserveMotionPhotos) {
+            MotionPhotoHelper.extractEmbeddedMp4(sourceFile)
+        } else {
+            null
+        }
         val calc = PhotoDimensionCalculator.calculate(uprightOrigW, uprightOrigH, config.maxMegapixels)
         val decodeOpts = BitmapFactory.Options().apply {
             inSampleSize = calc.sampleSize
             inPreferredConfig = Bitmap.Config.ARGB_8888
+            if (config.normalizeSrgb) {
+                runCatching { inPreferredColorSpace = ColorSpace.get(ColorSpace.Named.SRGB) }
+            }
         }
         val decoded = BitmapFactory.decodeFile(sourceFile.absolutePath, decodeOpts)
             ?: throw IllegalStateException("Failed decoding bitmap: ${sourceFile.name}")
@@ -451,6 +540,7 @@ object StorageSaverConverter {
         val dest = uniqueOutputFile(outputDir, outputStem, ".jpg")
         val tmp = File(outputDir, ".converting_${UUID.randomUUID()}.jpg")
         var note = ""
+        var copiedSourceVerbatim = false
         try {
             FileOutputStream(tmp).use { fos ->
                 finalBitmap.compress(Bitmap.CompressFormat.JPEG, config.jpegQuality, fos)
@@ -458,16 +548,40 @@ object StorageSaverConverter {
             }
             finalBitmap.recycle()
 
-            note = enrichExifTags(srcExif, tmp, takeout, fallbackFilenameExifDate, keepOriginalOrientation = false)
+            note = enrichExifTags(
+                srcExif,
+                tmp,
+                takeout,
+                fallbackFilenameExifDate,
+                keepOriginalOrientation = false,
+                stripGps = config.stripGpsGlobally
+            )
 
             val extLower = sourceFile.extension.lowercase()
             if (!calc.wasResized &&
+                !config.stripGpsGlobally &&
                 config.avoidRecompressingSmallJpegs &&
                 (extLower == "jpg" || extLower == "jpeg") &&
                 tmp.length() >= origBytes
             ) {
                 sourceFile.copyTo(tmp, overwrite = true)
-                note = enrichExifTags(srcExif, tmp, takeout, fallbackFilenameExifDate, keepOriginalOrientation = true)
+                copiedSourceVerbatim = true
+                note = enrichExifTags(
+                    srcExif,
+                    tmp,
+                    takeout,
+                    fallbackFilenameExifDate,
+                    keepOriginalOrientation = true,
+                    stripGps = false
+                )
+            }
+
+            if (motionMp4 != null && !copiedSourceVerbatim) {
+                if (MotionPhotoHelper.attachMotionMp4ToJpeg(tmp, motionMp4)) {
+                    note = listOf(note, "Motion Photo Preserved").filter { it.isNotBlank() }.joinToString(" + ")
+                }
+            } else if (motionMp4 != null && copiedSourceVerbatim) {
+                note = listOf(note, "Motion Photo Preserved").filter { it.isNotBlank() }.joinToString(" + ")
             }
 
             if (!tmp.renameTo(dest)) {
@@ -635,15 +749,22 @@ object StorageSaverConverter {
         targetFile: File,
         takeout: SidecarMetadata,
         fallbackFilenameDate: String?,
-        keepOriginalOrientation: Boolean
+        keepOriginalOrientation: Boolean,
+        stripGps: Boolean = false
     ): String {
         val outExif = ExifInterface(targetFile.absolutePath)
         if (sourceExif != null) {
             for (tag in PRESERVED_EXIF_TAGS) {
+                if (stripGps && tag in GPS_AND_PRIVACY_EXIF_TAGS) continue
                 val v = sourceExif.getAttribute(tag)
                 if (v != null) {
                     outExif.setAttribute(tag, v)
                 }
+            }
+        }
+        if (stripGps) {
+            for (tag in GPS_AND_PRIVACY_EXIF_TAGS) {
+                outExif.setAttribute(tag, null)
             }
         }
         if (!keepOriginalOrientation) {
@@ -671,7 +792,9 @@ object StorageSaverConverter {
             }
         }
 
-        if (outExif.latLong == null && takeout.latitude != null && takeout.longitude != null) {
+        if (stripGps) {
+            notes.add("GPS Stripped")
+        } else if (outExif.latLong == null && takeout.latitude != null && takeout.longitude != null) {
             outExif.setLatLong(takeout.latitude, takeout.longitude)
             notes.add("Takeout GPS")
         }

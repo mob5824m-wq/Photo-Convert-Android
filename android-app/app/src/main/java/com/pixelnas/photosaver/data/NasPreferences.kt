@@ -53,6 +53,7 @@ class NasPreferences(context: Context) {
                         maxMegapixels = obj.optDouble("max_megapixels", 16.0),
                         jpegQuality = obj.optInt("jpeg_quality", 85).coerceIn(40, 98),
                         compressVideos = obj.optBoolean("compress_videos", true),
+                        stripGps = obj.optBoolean("strip_gps", fn.equals("PublicShare", ignoreCase = true)),
                         outputSubfolder = obj.optString("output_subfolder", "")
                             .replace(Regex("[^A-Za-z0-9._/-]"), "")
                             .trim('/')
@@ -75,6 +76,7 @@ class NasPreferences(context: Context) {
                     put("max_megapixels", p.maxMegapixels)
                     put("jpeg_quality", p.jpegQuality)
                     put("compress_videos", p.compressVideos)
+                    put("strip_gps", p.stripGps)
                     put("output_subfolder", p.outputSubfolder)
                 }
             )
@@ -96,6 +98,19 @@ class NasPreferences(context: Context) {
             recursiveSubfolders = prefs.getBoolean("recursive_subfolders", true),
             restoreExifFromFilename = prefs.getBoolean("restore_exif_filename", true),
             mergeTakeoutJson = prefs.getBoolean("merge_takeout_json", true),
+            preserveMotionPhotos = prefs.getBoolean("preserve_motion_photos", true),
+            normalizeSrgb = prefs.getBoolean("normalize_srgb", true),
+            stripGpsGlobally = prefs.getBoolean("strip_gps_globally", false),
+            organizeByDate = prefs.getBoolean("organize_by_date", false),
+            perceptualDedupEnabled = prefs.getBoolean("perceptual_dedup_enabled", false),
+            perceptualHammingThreshold = prefs.getInt("perceptual_hamming_threshold", 6).coerceIn(1, 16),
+            extractTakeoutZips = prefs.getBoolean("extract_takeout_zips", true),
+            quietHoursEnabled = prefs.getBoolean("quiet_hours_enabled", false),
+            quietHoursStart = prefs.getInt("quiet_hours_start", 23).coerceIn(0, 23),
+            quietHoursEnd = prefs.getInt("quiet_hours_end", 7).coerceIn(0, 23),
+            webhookUrl = prefs.getString("webhook_url", "") ?: "",
+            webhookOnQuarantine = prefs.getBoolean("webhook_on_quarantine", true),
+            webhookOnLowStorage = prefs.getBoolean("webhook_on_low_storage", true),
             quarantineEnabled = prefs.getBoolean("quarantine_enabled", true),
             quarantineMaxRetries = prefs.getInt("quarantine_max_retries", 2).coerceIn(1, 5),
             autoPurgeOutputDays = prefs.getInt("auto_purge_output_days", 0),
@@ -144,6 +159,19 @@ class NasPreferences(context: Context) {
             .putBoolean("recursive_subfolders", updated.recursiveSubfolders)
             .putBoolean("restore_exif_filename", updated.restoreExifFromFilename)
             .putBoolean("merge_takeout_json", updated.mergeTakeoutJson)
+            .putBoolean("preserve_motion_photos", updated.preserveMotionPhotos)
+            .putBoolean("normalize_srgb", updated.normalizeSrgb)
+            .putBoolean("strip_gps_globally", updated.stripGpsGlobally)
+            .putBoolean("organize_by_date", updated.organizeByDate)
+            .putBoolean("perceptual_dedup_enabled", updated.perceptualDedupEnabled)
+            .putInt("perceptual_hamming_threshold", updated.perceptualHammingThreshold.coerceIn(1, 16))
+            .putBoolean("extract_takeout_zips", updated.extractTakeoutZips)
+            .putBoolean("quiet_hours_enabled", updated.quietHoursEnabled)
+            .putInt("quiet_hours_start", updated.quietHoursStart.coerceIn(0, 23))
+            .putInt("quiet_hours_end", updated.quietHoursEnd.coerceIn(0, 23))
+            .putString("webhook_url", updated.webhookUrl.trim())
+            .putBoolean("webhook_on_quarantine", updated.webhookOnQuarantine)
+            .putBoolean("webhook_on_low_storage", updated.webhookOnLowStorage)
             .putBoolean("quarantine_enabled", updated.quarantineEnabled)
             .putInt("quarantine_max_retries", updated.quarantineMaxRetries.coerceIn(1, 5))
             .putInt("auto_purge_output_days", updated.autoPurgeOutputDays.coerceAtLeast(0))

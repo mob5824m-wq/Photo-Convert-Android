@@ -43,8 +43,21 @@ DEFAULT_FOLDER_PROFILES: List[Dict] = [
         "max_megapixels": 16.0,
         "jpeg_quality": 85,
         "compress_videos": True,
+        "strip_gps": False,
         "output_subfolder": "Family",
         "description": "Converts to Storage Saver and saves into dedicated Output/Family device folder.",
+    },
+    {
+        "name": "PublicShare",
+        "folder_name": "PublicShare",
+        "mode": "storage_saver",
+        "storage_saver_enabled": True,
+        "max_megapixels": 16.0,
+        "jpeg_quality": 85,
+        "compress_videos": True,
+        "strip_gps": True,
+        "output_subfolder": "PublicShare",
+        "description": "Privacy scrubber: converts to Storage Saver, strips GPS & camera serials, keeps capture date.",
     },
 ]
 
@@ -147,6 +160,20 @@ class NasSettings:
     prefix_subfolder_name: bool = True
     restore_exif_from_filename: bool = True
     merge_takeout_json: bool = True
+    preserve_motion_photos: bool = True
+    normalize_srgb: bool = True
+    strip_gps_globally: bool = False
+    organize_by_date: bool = False
+    perceptual_dedup_enabled: bool = False
+    perceptual_hamming_threshold: int = 6
+    extract_takeout_zips: bool = True
+    quiet_hours_enabled: bool = False
+    quiet_hours_start: int = 23
+    quiet_hours_end: int = 7
+    webhook_url: str = ""
+    webhook_on_quarantine: bool = True
+    webhook_on_low_storage: bool = True
+    low_storage_alert_gb: float = 3.0
     quarantine_enabled: bool = True
     quarantine_max_retries: int = 2
     auto_purge_output_days: int = 0
@@ -190,6 +217,7 @@ class NasSettings:
                     "max_megapixels": float(p.get("max_megapixels", 16.0)),
                     "jpeg_quality": int(p.get("jpeg_quality", 85)),
                     "compress_videos": bool(p.get("compress_videos", is_saver)),
+                    "strip_gps": bool(p.get("strip_gps", fn.lower() == "publicshare")),
                 }
             )
         data["folder_profiles"] = norm_profiles
@@ -323,6 +351,14 @@ class SettingsManager:
                     value = max(0, min(3650, int(value)))
                 elif key == "min_free_storage_gb":
                     value = max(0.0, min(500.0, float(value)))
+                elif key == "low_storage_alert_gb":
+                    value = max(0.5, min(250.0, float(value)))
+                elif key == "perceptual_hamming_threshold":
+                    value = max(1, min(16, int(value)))
+                elif key in ("quiet_hours_start", "quiet_hours_end"):
+                    value = max(0, min(23, int(value)))
+                elif key == "webhook_url":
+                    value = str(value).strip()
                 elif key == "folder_profiles" and isinstance(value, list):
                     normalized = []
                     seen_names = set()
@@ -343,8 +379,12 @@ class SettingsManager:
                         out_sub = sanitize_folder_segment(
                             str(item.get("output_subfolder", ""))
                         )
+                        strip_gps = bool(
+                            item.get("strip_gps", nm.lower() == "publicshare")
+                        )
                         desc = str(item.get("description", "")).strip() or (
                             f"{'Original Quality' if not is_saver else 'Storage Saver (≤16 MP)'}"
+                            + (" · GPS Stripped" if strip_gps else "")
                             + (f" → Output/{out_sub}" if out_sub else " → Output")
                         )
                         normalized.append(
@@ -356,6 +396,7 @@ class SettingsManager:
                                 "max_megapixels": float(item.get("max_megapixels", 16.0)),
                                 "jpeg_quality": int(item.get("jpeg_quality", 85)),
                                 "compress_videos": bool(item.get("compress_videos", is_saver)),
+                                "strip_gps": strip_gps,
                                 "output_subfolder": out_sub,
                                 "description": desc,
                             }
@@ -391,3 +432,25 @@ def get_lan_ips() -> List[str]:
     except Exception:
         pass
     return ips or ["127.0.0.1"]
+
+
+def build_pairing_uri(
+    lan_ip: str,
+    smb_port: int = 4445,
+    share_name: str = "PixelNAS",
+    auth_enabled: bool = False,
+    auth_username: str = "pixel",
+    workgroup: str = "WORKGROUP",
+) -> str:
+    from urllib.parse import urlencode
+
+    params = {
+        "host": (lan_ip or "127.0.0.1").strip(),
+        "port": str(int(smb_port or 4445)),
+        "share": (share_name or "PixelNAS").strip(),
+        "auth": "credentials" if auth_enabled else "guest",
+        "user": (auth_username or "pixel").strip(),
+        "workgroup": (workgroup or "WORKGROUP").strip(),
+    }
+    return f"pixelnas://pair?{urlencode(params)}"
+

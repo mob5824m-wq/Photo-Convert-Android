@@ -25,10 +25,16 @@ class HouseholdApp : Application() {
     override fun onCreate() {
         super.onCreate()
         preferences = HouseholdPreferences(this)
-        syncAutoBackupSchedule(preferences.current.autoCameraSyncWifiOnly)
+        syncAutoBackupSchedule(
+            preferences.current.autoCameraSyncWifiOnly,
+            preferences.current.syncChargingOnly
+        )
     }
 
-    fun syncAutoBackupSchedule(enabled: Boolean) {
+    fun syncAutoBackupSchedule(
+        enabled: Boolean,
+        chargingOnly: Boolean = preferences.current.syncChargingOnly
+    ) {
         val wm = WorkManager.getInstance(this)
         if (!enabled) {
             wm.cancelUniqueWork(WORK_NAME_CAMERA_SYNC)
@@ -37,6 +43,7 @@ class HouseholdApp : Application() {
         val constraints = Constraints.Builder()
             .setRequiredNetworkType(NetworkType.UNMETERED)
             .setRequiresBatteryNotLow(true)
+            .setRequiresCharging(chargingOnly)
             .build()
         val req = PeriodicWorkRequestBuilder<CameraRollSmbWorker>(1, TimeUnit.HOURS)
             .setConstraints(constraints)
